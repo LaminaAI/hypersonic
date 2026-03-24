@@ -1,0 +1,9 @@
+{
+  "hooks": [
+    {
+      "event": "session-start",
+      "script": "hooks/session-start.sh",
+      "async": false
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "name": "hypersonic",
+  "version": "1.0.0",
+  "description": "Mission control for infinite AI coding agents",
+  "bin": {
+    "hypersonic": "./cli/hypersonic.mjs"
+  },
+  "type": "module",
+  "license": "MIT"
+}
