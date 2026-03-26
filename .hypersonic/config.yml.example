@@ -1,0 +1,15 @@
+# Copy this file to .hypersonic/config.yml inside a project to override defaults.
+
+defaults:
+  velocity: high
+  rigor: medium
+  max_questions: 1
+  test_mode: auto
+  auto_commit: false
+
+mission_control:
+  default_platform: claude
+  restart_delay_ms: 5000
+  dashboard_refresh_ms: 2000
+  max_log_lines: 100
+  recent_output_lines: 8

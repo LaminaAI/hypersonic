@@ -3,3 +3,9 @@ node_modules/
 *.log
 .env
 .autopilot-state.md
+.autopilot-log.md
+.hsonic-autopilot-state.md
+.hsonic-autopilot-log.md
+.hypersonic/config.yml
+
+*.tgz

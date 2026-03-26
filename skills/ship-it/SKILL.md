@@ -1,125 +1,170 @@
 ---
 name: ship-it
-description: "Use when work is complete and ready to be committed, pushed, or merged. Invoked at the end of V3/V4 workflows by hypersonic-core, or directly when the user says 'commit', 'push', 'PR', 'merge', 'ship it', 'let's deploy', or wants to finalize their work. Handles git hygiene, commit messages, branch management, and PR creation."
+description: "Use when work is ready to be committed, pushed, merged, or turned into a PR. Handle the final git work cleanly: commit shape, branch choice, PR text, and the last verification gate before shipping."
+parameters:
+  velocity: high
+  rigor: medium
+  max_questions: 1
+  test_mode: auto
+  auto_commit: false
 ---
 
-# Ship It — Clean Commits, Fast Merges
+# Ship It — Clean Finalization
 
-Work is done. Tests pass. Time to ship. This skill handles the git mechanics so the project history stays clean without slowing you down.
+Shipping is part of the work. A sloppy final step creates confusion for reviewers, breaks the branch history, or ships code that was never properly verified.
 
-## Commit hygiene
+Keep shipping simple, but do not skip the last checks that prevent embarrassing breakage.
 
-### Write commit messages that help future-you
+---
+
+## How Parameters Change Behavior
+
+- `velocity=high`: prefer the shortest safe path, usually commit directly unless the workflow clearly needs a branch or PR
+- `velocity=medium|low`: spend more time checking history shape, branch hygiene, and reviewer clarity
+- `rigor=low`: keep commit and branch handling minimal
+- `rigor=medium`: also verify history cleanliness and shipping prerequisites
+- `rigor=high`: also check branch state, rollout risk, and reviewer instructions more carefully
+- `max_questions=N`: ask at most `N` shipping questions; if the workflow is obvious, act without asking
+- `test_mode=none`: ship only after direct behavior verification and any critical risk checks
+- `test_mode=auto|relevant|full`: that verification depth is the floor before commit, PR, or merge
+- `auto_commit=true`: create the commit once the work is verified and the destination is clear
+- `auto_commit=false`: do not commit unless the user explicitly says to ship, commit, or finalize
+
+---
+
+## Choose The Shipping Path
+
+Pick one:
+- local commit only
+- branch plus commit
+- PR ready
+- merge ready
+
+Do not ask broad process questions if the repo workflow is already obvious.
+
+---
+
+## Commit Quality
+
+### Write useful commit messages
 
 Format:
-```
-<type>: <what changed in plain language>
-
-<optional body — WHY this change was made, not WHAT (the diff shows WHAT)>
+```text
+<type>: <plain-language summary>
 ```
 
-Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`
+Add a body only when the reason is not obvious from the diff.
 
 Good:
-```
-feat: add session expiry after 30min of inactivity
-
-Users were staying logged in indefinitely, which is a security risk
-for shared machines. Sessions now expire server-side with Redis TTL.
-```
+- `fix: reject expired sessions during refresh`
+- `feat: add notification settings page`
 
 Bad:
-```
-update code
-```
+- `update code`
+- `misc changes`
 
-Bad:
-```
-feat: implemented the session management feature with Redis-based 
-storage and automatic expiry functionality using TTL mechanisms 
-as discussed in the architecture brief document
-```
+### Keep commit shape coherent
 
-Keep the first line under 72 characters. The body is optional — use it when the "why" isn't obvious from the diff.
+Each commit should be:
+- coherent
+- reviewable
+- independently reversible
 
-### Commit granularity
+Do not ship a large system change as one giant commit if it can be split cleanly.
 
-- **V1:** One commit per patch.
-- **V2:** One commit for the whole task (unless it naturally breaks into 2-3).
-- **V3:** One commit per sub-task from the file map. Squash before merging if the history is noisy.
-- **V4:** One commit per work unit. These should tell a story when read in sequence.
+---
 
-Don't commit after every line change. Don't commit an entire V4 system as one giant commit either. Each commit should be: a coherent change that could be understood and (if needed) reverted independently.
+## Branching And PRs
 
-## Branch strategy
+### Branching
+- small V1 or V2 work: usually commit on the current branch
+- feature or system work: use a branch if the repo or team expects PR flow
+- large risky work: prefer a dedicated branch
 
-### When to branch
+### PR text
+Keep it short:
+1. what changed
+2. why it changed
+3. how to verify it
 
-- **V1-V2:** Commit directly to the current branch (usually `main` or the working branch). Creating a branch for a 5-line fix is overhead that helps nobody.
-- **V3:** Create a branch if the project uses PR-based workflow. Otherwise, commit to the current branch with clean granular commits.
-- **V4:** Always branch. Name: `<type>/<short-description>` (e.g., `feat/session-management`).
-
-### Branch naming
-
-```
-feat/session-management     ✅
-fix/null-pointer-on-login   ✅
-refactor/extract-auth-layer ✅
-sudip/new-feature           ❌ (who? what?)
-update                      ❌ (tells nothing)
-test-branch-3               ❌ (what is this?)
-```
-
-## Creating a PR
-
-When the user wants a PR (or the project workflow requires one):
-
-### PR title
-Same format as commit message first line: `<type>: <what>`
-
-### PR body
-Keep it concise. This template, filled in with 2-5 sentences total:
+Example:
 
 ```markdown
 ## What
-[One sentence: what this PR does]
+Adds session expiry to refresh flow.
 
 ## Why
-[One sentence: why this change is needed]
+Sessions could remain valid after server-side expiry.
 
 ## How to test
-[How a reviewer can verify this works — specific commands or steps]
+Run `pnpm test auth` and verify refresh rejects expired sessions.
 ```
 
-Don't include:
-- Screenshots of terminal output (just describe what happens)
-- Full architectural explanations (link to docs if needed)
-- Lists of every file changed (the diff shows that)
-- "This PR addresses issue #X" unless there's an actual issue tracker
+---
 
-### Before pushing
+## Verification Before Shipping
 
-Final checklist:
-- [ ] All tests pass locally
-- [ ] No unintended files staged (check `git status`)
-- [ ] No debug/console.log statements left in
-- [ ] No hardcoded secrets, API keys, or credentials
-- [ ] The branch is up to date with the target branch (rebase or merge)
-- [ ] Commit history is clean (squash fixup commits)
+Use `test_mode` as the minimum bar:
+- `none`: direct verification plus any critical risk checks
+- `auto`: relevant checks for the changed area
+- `relevant`: targeted tests plus nearby regression coverage
+- `full`: full suite before finalizing
 
-## Post-merge
+Also check:
+- `git status`
+- staged diff or final diff
+- debug code removed
+- secrets not introduced
 
-After merging:
-1. Delete the feature branch (local and remote)
-2. Pull the latest main
-3. If the change affects other developers: note what changed and any actions needed
+If the required verification did not happen, the work is not ready to ship.
 
-Don't create post-merge ceremony. The work is shipped. Move on.
+---
 
-## Offering the user options
+## Questions To Ask, If Any
 
-At the end of V3/V4 work, present options concisely:
+Use your question budget for the highest-leverage uncertainty only:
+- target branch unclear
+- PR vs direct commit unclear
+- merge policy unclear
 
-> "Everything is ready. I can: (1) create a PR to main, (2) merge directly to main, (3) just leave it on this branch for now. What do you prefer?"
+If the repo workflow is already obvious, do not ask.
 
-Don't explain what each option means. The user knows what a PR is.
+---
+
+## Anti-Patterns
+
+**Shipping without verification.** Finalization is not a substitute for proof.
+
+**Branch theater.** Do not create a branch for a trivial one-line fix just because it feels safer.
+
+**Vague commit messages.** If future-you cannot tell what changed, the commit failed.
+
+**PR bloat.** The PR body should help a reviewer, not repeat the whole diff.
+
+**Workflow amnesia.** If the repo already has a clear pattern, follow it.
+
+---
+
+## Anti-Rationalization Table
+
+| What you're thinking | What's actually true |
+|---|---|
+| "The tests passed earlier, I don’t need to rerun anything" | Shipping checks should reflect the final state, not an earlier one. |
+| "I’ll just make one giant commit" | Large commits hide risk and make rollback harder. |
+| "The branch name doesn’t matter" | Review and history quality start with naming clarity. |
+| "I’ll leave the debug output, it’s harmless" | It is not harmless when it ships. |
+| "I’ll commit now and explain later" | Clean shipping is part of the job, not optional polish. |
+
+---
+
+## Completion Checklist
+
+Before you call it shipped:
+
+1. The required verification depth is complete
+2. The commit or PR text is clear
+3. Branch and history shape match the repo workflow
+4. No debug code or secrets are slipping through
+5. `auto_commit` was respected
+
+The standard is simple: make the handoff clean, the verification real, and the history useful.

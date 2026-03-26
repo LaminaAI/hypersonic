@@ -30,7 +30,7 @@ npx hypersonic
   06:45:12 🔍 Scanning for next improvement...
 
 ──────────────────────────────────────────────────────────────────────
-  a add agent  k kill agent  ↑↓ select  l view log  q quit
+  a add agent  x kill agent  ↑↓ select  j/k select  l view log  q quit
 ```
 
 Or quick-launch a single agent:
@@ -44,6 +44,9 @@ npx hypersonic --codex ~/my-project "make it production-quality"
 npx hypersonic --gemini ~/my-project "90% test coverage, zero warnings"
 npx hypersonic --opencode ~/my-project "clean APIs, full docs"
 npx hypersonic --aider ~/my-project "optimize performance"
+
+# Explicit parameters
+npx hypersonic --project ~/my-project --vision "ship fast, but verify" --platform codex --velocity high --rigor medium --test-mode relevant --max-questions 1
 ```
 
 **Works with 5 platforms, 3 of them free:**
@@ -101,6 +104,18 @@ node cli/hypersonic.mjs --codex ~/my-project "your vision"
 
 From the dashboard, press `a` to add agents interactively. Each agent auto-restarts when context runs out.
 
+### Global npm install
+
+If you publish this package to npm, the README promise of `npx hypersonic` becomes literally true:
+
+```bash
+npm install -g hypersonic
+hypersonic
+
+# Or one-off
+npx hypersonic
+```
+
 ### Skills only (Claude Code plugin)
 
 If you just want the skills without mission control:
@@ -138,11 +153,145 @@ For servers or tmux sessions where you don't need the interactive dashboard:
 AIDER_MODEL=ollama/deepseek-coder-v2 ~/.hypersonic/scripts/hypersonic-loop-aider.sh ~/project "vision"
 ```
 
+### Repo-level config
+
+Hypersonic now supports repo-local defaults via `.hypersonic/config.yml`. Copy the example file from this repo and override only what you care about:
+
+```yaml
+defaults:
+  velocity: high
+  rigor: medium
+  max_questions: 1
+  test_mode: auto
+  auto_commit: false
+
+mission_control:
+  default_platform: claude
+  restart_delay_ms: 5000
+  dashboard_refresh_ms: 2000
+  max_log_lines: 100
+  recent_output_lines: 8
+```
+
+These values are consumed by:
+- `hooks/session-start.sh` when bootstrapping a new session
+- `cli/hypersonic.mjs` for quick-launch and interactive defaults
+- `scripts/hypersonic-loop-*.sh` for prompt construction and restart timing
+
 ### Verify
 
 Start a new session and ask for something. The agent will classify the velocity tier and route automatically. You should see something like:
 
 > "This looks like a **V2 task** — small feature, I'll plan briefly and build. Sound right?"
+
+## Testing
+
+There is no formal unit test suite yet. Right now the release gate should be smoke tests plus packaging checks.
+
+### 1. Runtime and shell smoke tests
+
+```bash
+npm run test:smoke
+```
+
+This verifies:
+- Node syntax for the CLI files
+- Shell syntax for hooks and loop scripts
+
+### 2. Packaging check
+
+```bash
+npm run test:pack
+```
+
+This verifies the npm tarball can be built and that the expected files are included.
+
+### 3. Manual behavior checks
+
+Recommended manual checks before release:
+
+```bash
+# Help / dashboard entry
+node cli/hypersonic.mjs --help
+
+# Runtime contract
+node cli/hypersonic-runtime.mjs contract --project .
+
+# Runtime env output
+node cli/hypersonic-runtime.mjs env --project .
+
+# Hook bootstrap
+sh hooks/session-start.sh | sed -n '1,18p'
+```
+
+### 4. Skill testing
+
+The skills are prompt assets, so the best test is behavior-level testing in a fresh agent session.
+
+Use prompts like:
+- `rapid-build`: "quick prototype a settings page"
+- `surgical-debug`: "this crashes when I submit the form"
+- `tdd-engine`: "add tests for this billing logic"
+- `code-review`: "review this change before I ship"
+- `autopilot`: "autopilot this repo and keep improving it"
+
+When testing skills, verify:
+- the right skill triggers
+- the parameter contract appears in the bootstrap
+- the workflow depth changes when you change `velocity`, `rigor`, `test_mode`, or `auto_commit`
+
+## Release
+
+If you want `npx hypersonic` to work for other people, yes: this should be published as an npm package.
+
+### Release checklist
+
+1. Bump `version` in `package.json`
+2. Run:
+
+```bash
+npm run test:smoke
+npm run test:pack
+```
+
+3. Review the package contents:
+
+```bash
+mkdir -p /tmp/hypersonic-npm-cache
+npm_config_cache=/tmp/hypersonic-npm-cache npm pack --dry-run
+```
+
+4. Publish:
+
+```bash
+npm publish
+```
+
+### Do you need this to be an npm package?
+
+If you only use Hypersonic locally from a cloned repo: no.
+
+If you want the README usage to work as written:
+
+```bash
+npx hypersonic
+```
+
+then yes, publishing to npm is the right path.
+
+### What npm gives you
+
+- `npx hypersonic`
+- `npm install -g hypersonic`
+- predictable CLI distribution
+- easier versioned releases
+
+### What still works without npm
+
+- `node cli/hypersonic.mjs`
+- local hooks
+- local loop scripts
+- local skills symlinked into your agent environment
 
 ## Skills
 
@@ -204,7 +353,7 @@ Karpathy's autoResearch runs 100 experiments overnight with zero human input. Th
 
 Every agent platform runs out of context eventually. Hypersonic handles this at three levels:
 
-1. **Skill level**: The agent writes `.autopilot-state.md` after every commit — a checkpoint file that lets the next session resume instantly.
+1. **Skill level**: The agent writes `.hsonic-autopilot-state.md` after every commit — a checkpoint file that lets the next session resume instantly.
 2. **Loop script level**: `scripts/hypersonic-loop.sh` auto-restarts the agent when a session dies. The new session reads the state file and continues.
 3. **Mission control level**: `cli/hypersonic.mjs` manages multiple agents, each auto-restarting independently. Monitor all of them from one terminal.
 
@@ -221,7 +370,7 @@ Session 4:  ...continues forever...
 [You wake up, Ctrl+C]
 
 Result: 47 atomic commits. Coverage 34%→82%. Response time 142ms→11ms.
-        Zero test failures. Full log in .autopilot-log.md.
+        Zero test failures. Full local log in .hsonic-autopilot-log.md.
 ```
 
 ## The design principles
