@@ -1,129 +1,167 @@
 ---
 name: surgical-debug
-description: "Use when fixing a bug, investigating unexpected behavior, or diagnosing a failure. Signals: 'it's broken', 'not working', 'error', 'bug', 'crash', 'wrong output', 'fails when', stack traces in the conversation, or any debugging task. This skill enforces evidence-first debugging — read before guessing, reproduce before fixing, verify before declaring victory."
+description: "Use when fixing a bug, investigating a failure, or diagnosing unexpected behavior. Evidence first: read before guessing, reproduce before fixing, verify before declaring victory."
+parameters:
+  velocity: high
+  rigor: medium
+  max_questions: 1
+  test_mode: auto
+  auto_commit: false
 ---
 
 # Surgical Debug — Evidence First, Always
 
-You're here to fix a bug. The natural instinct is to guess what's wrong and start changing code. Resist that. Most debugging time is wasted on wrong hypotheses. The fastest path to a fix is: evidence → root cause → targeted fix → verification.
+Most debugging time is wasted on wrong guesses. The fastest path to a real fix is: evidence -> reproduction -> root cause -> targeted fix -> verification.
 
-## The protocol
+Fix the smallest thing that proves the root cause. Do not mix debugging with cleanup, redesign, or speculative refactors.
 
-### Phase 1: Read the evidence (do this BEFORE forming hypotheses)
+---
 
-1. **Read the error.** The full error. Stack trace, error message, log output. Read it carefully. Most errors tell you exactly what's wrong if you actually read them.
+## How Parameters Change Behavior
 
-2. **Read the code at the error site.** Go to the file and line number in the stack trace. Read the function. Read what calls it. Read what it calls.
+- `velocity=high`: timebox diagnosis, get to a reproduction quickly, and avoid side quests
+- `velocity=medium|low`: spend more time on boundary tracing, instrumentation, and deeper failure analysis
+- `rigor=low`: find the root cause and verify the main fix path
+- `rigor=medium`: also check nearby regressions and edge-case failure handling
+- `rigor=high`: require stronger reproduction, broader verification, and more careful blast-radius thinking
+- `max_questions=N`: ask at most `N` clarification questions; if the evidence is already in the repo or logs, do not ask
+- `test_mode=none`: verify the reproduction and direct fix path, plus any risk-driven checks
+- `test_mode=auto|relevant|full`: that verification depth becomes the minimum after the fix
+- `auto_commit=true`: if the bug is fixed and verified, commit the fix without another ship prompt
+- `auto_commit=false`: do not commit unless the user asks to ship or finalize
 
-3. **State what you know** in one sentence: "The error is [X] happening in [Y] when [Z]."
+---
 
-If you cannot state this clearly, you haven't read enough yet. Go back and read more.
+## The Debugging Flow
 
-### Phase 2: Reproduce (the fix doesn't count if you can't prove the bug exists)
+### 1. Read the evidence first
+Before changing code:
+1. Read the full error, stack trace, logs, or wrong output.
+2. Read the code at the failure site.
+3. State what you know in one sentence.
 
-Before changing any code:
+Example:
+- "The API returns 500 in `createSession` when Redis is unavailable."
 
-1. **Find or write a reproduction.** This can be:
-   - Running the existing failing test
-   - Running the app and triggering the bug
-   - Writing a minimal test case that fails
+If you cannot state the failure clearly, you have not read enough yet.
 
-2. **Confirm the reproduction fails.** See the error with your own eyes. If you can't reproduce it, you cannot debug it — ask the user for more information.
+### 2. Reproduce it
+Before you fix anything:
+- Run the failing test
+- Trigger the bug manually
+- Or write the smallest repro that fails
 
-The reproduction becomes your verification at the end. Don't skip this.
+If you cannot reproduce it, you cannot prove the fix.
 
-### Phase 3: Isolate the root cause
+### 3. Isolate the root cause
+Form at most three hypotheses. For each one, define one check that will confirm or kill it.
 
-Now form hypotheses. But constrain yourself:
+Good:
+- "Hypothesis: token parsing fails on empty header -> inspect parsed value at request boundary"
 
-**The 3-hypothesis rule:** Form at most 3 hypotheses. For each one, identify the ONE thing you would check to confirm or eliminate it. Check the most likely one first.
+Bad:
+- changing several files and hoping one helps
 
-```
-Hypothesis 1 (most likely): [X] because [evidence]
-  → Check: [specific thing to verify]
-Hypothesis 2: [Y] because [evidence]  
-  → Check: [specific thing to verify]
-Hypothesis 3: [Z] because [evidence]
-  → Check: [specific thing to verify]
-```
-
-**Check, don't guess.** Read the code. Add a log statement. Run with a debugger. Inspect the state at the failure point. Whatever it takes to get EVIDENCE, not speculation.
-
-**When you find the root cause**, state it clearly:
-> "The root cause is: [specific thing]. It happens because [mechanism]. The fix is [change]."
-
-### Phase 4: Fix with minimal blast radius
-
-Change the minimum amount of code to fix the bug. Not "fix the bug and also refactor the function and rename the variable and update the style." Just fix the bug.
+### 4. Fix the root cause
+Change the minimum code that solves the actual cause.
 
 Checklist before editing:
-- [ ] I know the root cause (not just a symptom)
-- [ ] My fix addresses the root cause (not a workaround)
-- [ ] I'm changing the minimum necessary code
-- [ ] I'm not introducing new behavior beyond the fix
+- I know the root cause, not just the symptom
+- My fix addresses the cause, not a workaround
+- I am changing the minimum necessary code
+- I am not mixing unrelated cleanup into the fix
 
-### Phase 5: Verify
+### 5. Verify it
+Use `test_mode` as the floor:
+- rerun the reproduction
+- run the required verification scope
+- check the real user or system path once
 
-1. Run your reproduction from Phase 2. It should pass now.
-2. Run the full test suite (or the relevant subset). Nothing else should break.
-3. If the bug was user-reported, confirm the user's scenario works.
+If the bug crosses multiple layers, verify the full path once.
 
-**Only declare victory after verification.** "I made a change that should fix it" is not the same as "I verified it's fixed."
+---
 
-## Anti-patterns this skill prevents
+## Debugging Techniques That Actually Work
 
-**Shotgun debugging:** Changing multiple things at once and hoping one of them helps. If you change 3 things and the bug goes away, you don't know which change fixed it — and the other 2 might introduce new bugs.
+### Read before guessing
+Most errors tell you more than you think if you actually read them.
 
-**Hypothesis-first debugging:** "I bet it's a race condition" → spend 2 hours investigating race conditions → discover it was a typo in a config file. Read the evidence first.
+### Check boundaries
+For multi-layer bugs, inspect what enters and exits each boundary:
+- frontend -> API
+- API -> service
+- service -> database
+- worker -> queue
 
-**Fix-and-pray:** Making a change without reproducing first. You can't know it's fixed if you never saw it broken.
+The bug usually lives where the data changes shape incorrectly.
 
-**Scope creep during debugging:** "While I'm in here, let me also refactor this function." No. Fix the bug. Commit. Then refactor separately if needed.
+### Instrument with purpose
+Add logging or debug output only to answer a specific hypothesis.
 
-**Explaining without checking:** "The error probably happens because X." Did you check? Did you read the code at line N? Did you look at the actual values? Probably is not evidence.
+### One change at a time
+If you change three things and the bug goes away, you still do not know the cause.
 
-## Escalation
+### Keep the blast radius small
+Debug fixes should be surgical unless the root cause is architectural.
 
-If after 15 minutes of Phase 3 you haven't identified the root cause:
-1. Add instrumentation (logging, debug prints) at the boundaries of the suspect area
-2. Reproduce with instrumentation active
-3. Read the output
+---
 
-If after 30 minutes total you're still stuck:
-1. Summarize what you've learned and eliminated
-2. Ask the user for additional context
-3. Consider: is this actually a different (harder) bug than what was reported?
+## Examples
 
-## Defense in depth — for multi-layer bugs
+### Simple bug
+- "Login fails when password has trailing spaces"
+  -> reproduce with one failing request, isolate normalization bug, fix input handling, rerun login tests
 
-When the bug crosses system boundaries (frontend → API → database, or service A → service B):
+### Multi-layer bug
+- "Webhook succeeds but invoice is never created"
+  -> trace request receipt, queue enqueue, worker execution, DB write, find the broken boundary, fix only that boundary
 
-**Boundary logging**: At EACH component boundary, log what enters and what exits. The bug lives where the data transforms incorrectly.
+---
 
-```
-[Frontend] Sending: { userId: "abc", amount: 100 }
-[API] Received: { userId: "abc", amount: 100 }
-[API] Sending to DB: { user_id: "abc", amount: "100" }  ← string, not number!
-[DB] Stored: { user_id: "abc", amount: "100" }
-```
+## Anti-Patterns
 
-The fix is at the API layer where `amount` became a string. Without boundary logging, you might waste time looking at the frontend or database.
+**Shotgun debugging.** Changing multiple things at once and hoping one works.
 
-**The one-change-at-a-time rule**: When fixing multi-layer bugs, fix ONE layer, verify, then move to the next. Don't fix frontend + API + database simultaneously and hope it all works.
+**Guess-first debugging.** "It’s probably a race condition" is not evidence.
 
-## When to skip this skill
+**Fix-and-pray.** Making a change without first reproducing the bug.
 
-- The "bug" is a missing feature → this is a V2/V3 task, not a bug
-- The error message is self-explanatory AND the fix is a V1 patch → just fix it via hypersonic-core V1, don't invoke the full debug protocol
-- The user already knows the root cause and just wants you to write the fix → trust them, write the fix, verify
+**Scope creep during debugging.** Fix the bug first. Refactor later if needed.
 
-## Debugging anti-rationalizations
+**Explaining without checking.** "Probably" is not a debugging result.
+
+---
+
+## Anti-Rationalization Table
 
 | What you're thinking | What's actually true |
 |---|---|
-| "I'm pretty sure it's X, let me just fix it" | Pretty sure = guessing. Read the evidence first. 5 minutes of reading beats 30 minutes of wrong fixes. |
-| "I'll add some logging and see" | Good instinct, but read the existing error output first. The stack trace might already tell you everything. |
-| "It worked before so the new code must be wrong" | Maybe. `git diff` and read what changed. But also: it might have been broken before and only manifested now. |
-| "Let me refactor this while I'm fixing the bug" | No. Fix the bug. Commit. THEN refactor in a separate commit. |
-| "The fix is obvious, I don't need to reproduce it" | If you can't reproduce it, you can't verify the fix. Obvious fixes for unreproduced bugs have a ~50% success rate. |
-| "I fixed it" (without running verification) | Did you run the reproduction? Did you run the test suite? "I changed the code" ≠ "I fixed the bug." |
+| "I’m pretty sure it’s X, let me just fix it" | Pretty sure means guessing. Read the evidence first. |
+| "I’ll add some logging and see" | Good instinct, but read the existing error output first. |
+| "The fix is obvious, I don’t need to reproduce it" | If you cannot reproduce it, you cannot verify the fix. |
+| "Let me refactor this while I’m fixing the bug" | No. Fix the bug, verify it, then refactor separately. |
+| "I fixed it" | Did you rerun the repro? Did you run the required checks? |
+
+---
+
+## When To Escalate
+
+Reclassify through `hypersonic-core` when:
+- the "bug" is actually missing behavior
+- the fix spans multiple subsystems
+- the root cause is architectural
+- the verification path becomes broad enough that this is really feature work
+
+---
+
+## Completion Checklist
+
+Before you call the bug fixed:
+
+1. The failure was reproduced or directly observed
+2. The root cause is clear
+3. The fix is narrow and targeted
+4. The required verification depth from `test_mode` is done
+5. `auto_commit` was respected
+
+The standard is simple: prove the failure, fix the cause, and prove the fix.

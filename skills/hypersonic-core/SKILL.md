@@ -1,114 +1,223 @@
 ---
 name: hypersonic-core
-description: "MUST invoke before any development task. Routes work to the right process based on complexity. Use when the user asks to build, fix, change, debug, refactor, or ship anything. This is the entry point for all Hypersonic workflows — it classifies what kind of work this is and ensures the right amount of process is applied. Never skip this. If you're about to write code, invoke this first."
+description: "Use before any development task. This is the router for Hypersonic. It classifies scope, picks the lightest workflow that fits, loads repo knowledge when it matters, and routes to the right supporting skills."
+parameters:
+  velocity: high
+  rigor: medium
+  max_questions: 1
+  test_mode: auto
+  auto_commit: false
 ---
 
-# Hypersonic Core — Velocity Router
+# Hypersonic Core — Route First, Then Build
 
-You are using Hypersonic. The core principle: **match rigor to complexity.** A one-line fix does not need a design document. A new subsystem does not need "just vibes." Your first job on any task is to figure out which one you're looking at.
+The job of `hypersonic-core` is simple: classify the task fast, choose the lightest safe workflow, and get into execution. If this router is too heavy, every other skill gets slower. If it is too loose, the wrong work gets the wrong process.
 
-## Step 1: Classify the velocity tier
+Match rigor to scope. Do not add process because it feels safe.
 
-Read the user's request. Classify it into exactly one tier:
+---
 
-| Tier | Name | Signal | Scope | Time |
-|------|------|--------|-------|------|
-| **V1** | Patch | Typo, config, style, rename, one-liner | 1 file, < 20 lines changed | < 5 min |
-| **V2** | Task | Small feature, focused bugfix, add endpoint | 2–5 files, clear scope | 5–30 min |
-| **V3** | Feature | Multi-component capability, new user-facing flow | 5–15 files, needs a plan | 30 min – 3 hr |
-| **V4** | System | New subsystem, major refactor, architecture change | 15+ files, cross-cutting | 3+ hr |
+## How Parameters Change Behavior
 
-**Ambiguous? Bias toward the lower tier.** You can always escalate. You cannot un-waste the user's time.
+- `velocity=high`: bias toward V1 or V2 when safe, shorter plans, and faster execution
+- `velocity=medium|low`: allow more planning, more explicit tradeoffs, and more cautious routing
+- `rigor=low`: choose lighter process and lighter verification unless risk forces escalation
+- `rigor=medium`: use the normal process for the chosen tier
+- `rigor=high`: escalate sooner, ask stronger questions, and require stronger verification
+- `max_questions=N`: ask at most `N` clarification questions before acting; after that, state assumptions and continue unless blocked by real risk
+- `test_mode=none`: permit lighter verification where risk is low
+- `test_mode=auto|relevant|full`: raise the verification floor for the chosen workflow
+- `auto_commit=true`: V1 and V2 work can commit automatically once verified; later workflows can finalize without another ship prompt when appropriate
+- `auto_commit=false`: do not commit unless the user asks to ship or the workflow explicitly requires it
 
-Tell the user your classification in one line:
-> "This looks like a **V2 task** — small feature, I'll plan briefly and build. Sound right?"
+---
 
-If the user disagrees, re-classify. The user's judgment wins.
+## The Velocity Tiers
 
-## Step 1.5: Load repo knowledge
-
-Before starting any V2+ task, check if `.hypersonic/learned.md` exists in the repo. If it does, read it. This contains hard-won knowledge from previous sessions — gotchas, conventions, user preferences, architecture notes. It costs ~200-500 tokens and can save you from repeating mistakes that already cost someone 30 minutes.
-
-For V1 patches, skip this. The overhead isn't worth it for a one-liner.
-
-## Step 2: Route to the right workflow
+Pick exactly one tier.
 
 ### V1 — Patch
-No ceremony. Just do it.
-1. Make the change
-2. Verify it works (run the relevant test, or manually confirm)
-3. Commit with a clear message
-4. Done
+Use for:
+- typo
+- config tweak
+- rename
+- one-file low-risk fix
 
-Do NOT invoke any other skills. Do NOT write a plan. Do NOT ask clarifying questions unless the request is genuinely ambiguous.
+Typical shape:
+- obvious scope
+- low blast radius
+- no design needed
 
 ### V2 — Task
-Light process.
-1. State your approach in 2-3 sentences (not a document, just say it in chat)
-2. If the task is a bugfix → invoke `hypersonic:surgical-debug`
-3. Implement the change
-4. Write or update a test for the core behavior (invoke `hypersonic:tdd-engine` if unsure)
-5. Verify all existing tests pass
-6. Commit
-7. Invoke `hypersonic:evolution-engine` if you learned something worth capturing
+Use for:
+- focused bugfix
+- small feature
+- one endpoint
+- one user-facing behavior change
+
+Typical shape:
+- clear target
+- a few files
+- limited blast radius
 
 ### V3 — Feature
-Structured process.
-1. Invoke `hypersonic:architect` to produce a design brief (NOT a full spec — a brief)
-2. Get user sign-off on the brief (one message, not a multi-round review)
-3. Break into V2-sized tasks. List them as a checklist in chat
-4. Execute each task sequentially. For each:
-   - Implement with tests (`hypersonic:tdd-engine`)
-   - Commit after each task completes
-5. When all tasks done → invoke `hypersonic:code-review` for a self-review pass
-6. Invoke `hypersonic:ship-it` to finalize
-7. Invoke `hypersonic:evolution-engine` to capture learnings from this feature
+Use for:
+- multi-part feature
+- user-facing flow
+- capability that spans several components
+
+Typical shape:
+- needs a short design before coding
+- breaks into V2-sized tasks
 
 ### V4 — System
-Full process.
-1. Invoke `hypersonic:architect` in deep mode — produce an architecture brief with component boundaries and interface contracts
-2. Get user sign-off section by section (break into digestible chunks)
-3. Decompose into V2/V3-sized work units with dependency ordering
-4. For subagent-capable environments: dispatch each unit to a subagent with clear context (the architecture brief + that unit's spec). **Include `.hypersonic/learned.md` path in subagent context** so they benefit from repo knowledge.
-5. For single-agent environments: execute sequentially with commits per unit
-6. Integration testing after all units complete
-7. `hypersonic:code-review` → `hypersonic:ship-it`
-8. Invoke `hypersonic:evolution-engine` — V4 tasks almost always produce learnings
+Use for:
+- subsystem
+- large refactor
+- architecture change
 
-## Step 3: Manage context pressure
+Typical shape:
+- cross-cutting
+- multi-stage
+- easy to get wrong without boundaries
 
-As you work, be aware of your context window:
-- **After completing each V2+ task**, mentally assess: am I still sharp, or is context getting bloated?
-- **If context is heavy** (long conversation, many file reads): summarize what's done, what's next, and compact before continuing
-- **Never re-read the full plan if you can re-read just the next task**
-- **For V4 work**: the architecture brief should be saved to a file, not held in chat context
+**Examples:**
+- change a label, fix a typo, update a flag -> V1
+- add one endpoint, fix one failing flow, add one validation path -> V2
+- add a settings flow, build a notifications feature -> V3
+- replace auth model, redesign sync pipeline, split a monolith area -> V4
 
-## The anti-patterns (things Hypersonic does NOT do)
+When unsure, start lower and escalate quickly if the scope expands.
 
-- ❌ Force a spec document for a CSS color change
-- ❌ Require TDD for a config file edit
-- ❌ Demand brainstorming before a bugfix
-- ❌ Write implementation plans detailed enough for "an enthusiastic junior engineer" — you ARE a capable engineer, act like it
-- ❌ Block on code review for V1/V2 tasks
-- ❌ Create files in `docs/superpowers/specs/` or any ceremony directory
+---
 
-## Process anti-rationalizations
+## Step 1: Say The Route In One Short Message
 
-Agents rationalize skipping process in both directions. Catch yourself:
+State the tier and the next move in one line.
+
+Examples:
+- "This is a V1 patch. I’ll make the change and verify it."
+- "This is a V2 task. I’ll plan briefly, implement it, and run relevant tests."
+- "This is a V3 feature. I’ll do a short design brief first, then break it into tasks."
+- "This is a V4 system change. I’ll define boundaries and a staged execution plan before coding."
+
+Do not turn classification into a meeting.
+
+---
+
+## Step 2: Load Repo Knowledge When It Pays Off
+
+For V2, V3, and V4:
+1. Check whether `.hypersonic/learned.md` exists
+2. Read it before planning or coding
+3. Apply the conventions and gotchas you find
+
+For V1, skip it unless the task touches a known fragile area.
+
+---
+
+## Routing Rules
+
+### V1 Patch
+1. Make the change
+2. Run the smallest useful verification
+3. Summarize the result
+4. Commit only if `auto_commit=true` or the user asked to ship
+
+Do not create a plan. Do not invoke other skills unless the task stops being V1.
+
+### V2 Task
+1. State the plan in 1-3 sentences
+2. If it is a bug, use `surgical-debug`
+3. Implement the change
+4. Add or update the core test unless `test_mode=none`
+5. Use `tdd-engine` when the testing approach is not obvious
+6. Run relevant verification
+7. Commit only if `auto_commit=true` or the user asked to ship
+8. Use `evolution-engine` if you learned something repo-specific
+
+### V3 Feature
+1. Use `architect` for a short design brief
+2. Get a quick user checkpoint if the direction is not already clear
+3. Break the work into V2-sized tasks
+4. Execute task by task with tests
+5. Use `code-review` before finalizing
+6. Use `ship-it` when the user wants to finalize
+7. Use `evolution-engine` if the work produced reusable repo knowledge
+
+### V4 System
+1. Use `architect` for an architecture brief with boundaries and sequence
+2. Split the work into ordered units
+3. Execute per unit, not as one giant build
+4. Reuse V2 and V3 flows inside the units
+5. Run integration verification after the units come together
+6. Use `code-review`, then `ship-it`, then `evolution-engine`
+
+---
+
+## Specialized Skill Handoffs
+
+Use:
+- `rapid-build` for exploration, prototyping, or explicit speed over ceremony
+- `surgical-debug` for diagnosis-first work
+- `tdd-engine` when tests matter and the right level is not obvious
+- `architect` when design needs to happen before coding
+- `code-review` before shipping feature or system work
+- `ship-it` when the user wants commit, PR, merge, or finalization
+- `autopilot` when the user wants continuous unattended progress
+- `evolution-engine` when you learned something worth keeping in repo memory
+
+---
+
+## Escalate Or De-Escalate Fast
+
+Escalate when:
+- the file count or blast radius grows
+- the task needs design to avoid thrash
+- hidden dependencies appear
+- verification becomes broader than expected
+
+De-escalate when:
+- the change is smaller than it looked
+- the design is already obvious
+- the real work fits in a focused implementation pass
+
+Say the tier change plainly. Do not silently change process.
+
+---
+
+## Anti-Patterns
+
+**Process inflation.** Do not force a design brief on a one-line fix.
+
+**Under-routing.** Do not treat a V4 system as if it were a patch.
+
+**Verification amnesia.** Routing still needs the right level of proof.
+
+**Process words instead of progress.** If the router keeps talking without moving to execution, it failed.
+
+---
+
+## Anti-Rationalization Table
 
 | What you're thinking | What's actually true |
 |---|---|
-| "This is too simple to classify" | Classification takes 5 seconds. Misclassifying a V3 as V1 costs hours. |
-| "I'll just start coding and see where it goes" | That's valid — invoke `rapid-build`. But don't pretend it's a V2 task. |
-| "This needs a full design" (for a V2 task) | Are you avoiding implementation by planning? The design brief for V2 is 2-3 sentences in chat. |
-| "Let me just do it all at once" (for a V4 system) | Decompose. Every V4 that shipped as one giant commit had bugs nobody found until production. |
-| "The user said it's simple, so V1" | Users underestimate scope. Read the request, classify based on actual scope, tell them if you disagree. |
-| "I'll skip the evolution-engine, nothing interesting happened" | If you completed a V2+ task and touched more than 3 files, something is worth capturing. Spend 15 seconds reflecting. |
+| "This is too simple to classify" | Classification takes seconds and avoids hours of wrong process. |
+| "I’ll just start coding and see where it goes" | That is only valid if this is really rapid-build, not hidden V3 work. |
+| "This needs a full design" | Maybe not. Many V2 tasks only need 1-3 sentences of approach. |
+| "Let me just do it all at once" | Large work must be decomposed or it becomes harder to verify. |
+| "The user said it’s simple, so it must be V1" | Users can underestimate scope. Classify by real blast radius. |
 
-## Escalation and de-escalation
+---
 
-Mid-task, if you realize the scope is bigger or smaller than classified:
-- **Escalating** (V2 → V3): Stop. Tell the user: "This is bigger than I thought — it touches X, Y, Z. Let me step back and do a quick design brief." Then switch to the V3 workflow.
-- **De-escalating** (V3 → V2): Tell the user: "This is simpler than expected — I'll just build it directly." Then switch to V2.
+## Completion Checklist
 
-Always announce tier changes. Never silently change process level.
+Before you leave the router:
+
+1. The tier is clear
+2. The next move is clear
+3. Repo knowledge was loaded if it mattered
+4. The chosen workflow matches the real scope
+5. `auto_commit`, `test_mode`, and `max_questions` are now shaping the next skill
+
+The standard is simple: classify quickly, route correctly, and get into execution.

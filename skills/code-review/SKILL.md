@@ -1,92 +1,147 @@
 ---
 name: code-review
-description: "Use after completing V3 or V4 implementation, before shipping. Invoked by hypersonic-core at the end of feature/system work. Performs a self-review focused on real problems — not style nitpicks. Also use when the user asks you to review code, review a PR, or check quality of existing code."
+description: "Use after implementation, before shipping, or when the user explicitly asks for a review. Focus on bugs, regressions, missing verification, weak failure handling, and risky changes. Skip style nitpicks and low-value commentary."
+parameters:
+  velocity: high
+  rigor: medium
+  max_questions: 1
+  test_mode: auto
+  auto_commit: false
 ---
 
-# Code Review — Find Real Problems, Skip the Bike-Shedding
+# Code Review — Find Real Problems
 
-This is a review pass focused on things that will actually cause problems. Not naming conventions. Not import ordering. Not whether you prefer `const` or `let`. Real problems.
+Good review is not about taste. It is about catching things that will actually hurt users, operators, or the next engineer.
 
-## The review checklist
+Review quickly, but not lazily. Spend time where failure is expensive.
 
-Go through each item. If it passes, move on. If it fails, fix it before shipping.
+---
+
+## How Parameters Change Behavior
+
+- `velocity=high`: timebox the review and focus on high-signal issues first
+- `velocity=medium|low`: spend more time on failure modes, maintainability, and edge cases
+- `rigor=low`: check core correctness and obvious risks
+- `rigor=medium`: also check failure handling, clarity, and test gaps
+- `rigor=high`: also check rollout risk, security basics, performance traps, and regression exposure
+- `max_questions=N`: ask at most `N` review questions; if unsure, state the risk and best recommendation
+- `test_mode=none`: manual and targeted verification may be enough unless the change is risky
+- `test_mode=auto|relevant|full`: the review should enforce that verification scope before approval
+- `auto_commit=true`: if review fixes are small, verified, and clearly correct, commit them without another ship prompt
+- `auto_commit=false`: fix issues if needed, but do not commit unless the user asks to ship
+
+---
+
+## The Review Order
+
+Check in this order:
+1. Does it work?
+2. Can it fail badly?
+3. Will the next engineer understand it?
+4. Are there obvious performance or security traps?
+
+Do not start with naming or formatting.
+
+---
+
+## The Core Review Pass
 
 ### 1. Does it work?
+- Run the required verification for `test_mode`
+- Check the changed behavior directly
+- If the new behavior has no meaningful verification, that is a finding
 
-- Run the full test suite. All tests pass? Good.
-- If there are no tests for the new behavior, that's a finding. Write the critical ones.
-- Manually test the happy path if it's a user-facing change.
+### 2. Can it fail badly?
+Check external boundaries:
+- API calls
+- database queries
+- filesystem
+- user input
+- async flows
 
-This is the only gate that is absolutely non-negotiable. Everything else can be weighed.
+Ask:
+- What happens when it fails?
+- What happens when it returns bad data?
+- What happens when it is slow?
 
-### 2. Are the failure modes handled?
+### 3. Will the next engineer understand it?
+Look for:
+- confusing names
+- surprising control flow
+- magic values with no meaning
+- comments missing only where the code would otherwise be hard to follow
 
-For each external boundary your code touches (API call, database query, file read, user input):
-- What happens if it fails?
-- What happens if it returns unexpected data?
-- What happens if it's slow?
+### 4. Are there obvious performance or security traps?
+Look for:
+- N+1 queries
+- unbounded reads
+- heavy sync work in hot paths
+- unsafe input handling
+- missing auth on new entry points
+- secrets in code
 
-You don't need to handle every conceivable error. You need to handle the errors that are LIKELY and the errors that are CATASTROPHIC. The intersection of unlikely and harmless can wait.
+---
 
-### 3. Will the next person understand this?
+## Fix vs Report
 
-Read your code as if you've never seen it before. Focus on:
-- **Mystery functions:** Any function where the name doesn't make the purpose obvious? Rename it or add a one-line comment.
-- **Magic numbers/strings:** Any literals that would confuse someone? Extract to a named constant.
-- **Surprising control flow:** Any early returns, fallthrough cases, or exception-based control flow that isn't obvious? Add a comment explaining why.
+Prefer fixing concrete problems over writing long review notes.
 
-Don't add comments that just restate the code. `// increment counter` above `counter++` helps nobody.
+If you need to report instead of fix:
+1. say what is wrong
+2. say why it matters
+3. say the smallest good next action
 
-### 4. Are there obvious performance landmines?
+Example:
+- "The new endpoint accepts unauthenticated writes. Guard it with the existing session middleware before shipping."
 
-Not premature optimization. Just check for:
-- N+1 queries (looping database calls)
-- Unbounded data structures (loading an entire table into memory)
-- Missing indexes on queried fields
-- Synchronous blocking in async contexts
-- Regex on user input without limits (ReDoS)
+---
 
-If you find one, fix it. If you're not sure it's a real problem, note it and move on.
+## Examples
 
-### 5. Security basics (30-second scan)
+### High-signal finding
+- feature says "401 on bad credentials" but tests only cover success
+  -> review finding: missing negative-path verification
 
-- User input goes into a SQL query? → Is it parameterized?
-- User input goes into HTML? → Is it escaped?
-- Authentication on new endpoints? → Are they protected?
-- Secrets in code? → Move to environment variables.
+### Low-value noise
+- "I would personally rename `items` to `records`"
+  -> not a real review issue unless the name is actually misleading
 
-Not a full security audit. Just the obvious stuff that would be embarrassing.
+---
 
-## How to report findings
+## Anti-Patterns
 
-Don't write a review document. Just fix the problems you find. For anything you're not sure about, tell the user:
+**Style-first review.** Style is not the primary risk.
 
-> "During review I noticed [thing]. I [fixed it / want your input] because [reason]."
+**Approval without verification.** "Looks good" is not a review result.
 
-### Severity guide
+**Architecture overreaction.** Do not ask for a rewrite when a focused fix is enough.
 
-- **Fix now:** Will cause bugs, data loss, security issues, or crashes.
-- **Fix before shipping:** Won't crash but will confuse users or create maintenance burden.
-- **Note for later:** Code smell or tech debt that doesn't affect current functionality.
+**Review-document theater.** Fix the problem or report it clearly. Do not produce ceremony.
 
-Fix the first category. Fix the second if time allows. Mention the third only if it's significant.
+**Blocking over preference.** Risk blocks shipping. Taste does not.
 
-## What this review does NOT do
+---
 
-- ❌ Nitpick variable naming conventions
-- ❌ Enforce a specific code style (that's what linters are for)
-- ❌ Require architectural changes to working code
-- ❌ Block shipping over stylistic preferences
-- ❌ Produce a formal review document
-- ❌ Require a second review of the review fixes
+## Anti-Rationalization Table
 
-## Reviewing other people's code
+| What you're thinking | What's actually true |
+|---|---|
+| "The tests passed, so review is unnecessary" | Passing tests do not prove failure handling, clarity, or rollout safety. |
+| "This is just style" | If it causes confusion, it may be a real maintainability problem. If not, skip it. |
+| "I don’t need to run anything, the code looks right" | Review without verification is just opinion. |
+| "I found one issue, that’s enough" | Keep scanning the highest-risk areas in order. |
+| "This should be rewritten from scratch" | Usually false. Prefer the smallest fix that removes the risk. |
 
-If the user asks you to review a PR or existing code:
+---
 
-1. Read the code first. All of it. Don't comment as you go — read the whole thing to understand the intent.
-2. Identify the 3 most important issues. Not all issues. The important ones.
-3. For each issue: what's wrong, why it matters, and a concrete suggestion.
-4. If the code is good, say so briefly and specifically: "The error handling in the retry logic is solid — it correctly distinguishes transient from permanent failures."
+## Completion Checklist
 
-Don't pad positive feedback. Don't enumerate everything that's fine. Highlight what matters.
+Before you call the review done:
+
+1. The required verification depth is complete
+2. The biggest risks were checked first
+3. Real issues were fixed or clearly reported
+4. No style-only noise is leading the review
+5. `auto_commit` was respected
+
+The standard is simple: find real problems, tighten the work, and keep shipping moving.
