@@ -185,7 +185,7 @@ export function toShellEnv(runtimeConfig) {
 }
 
 export function resolveRepoRoot() {
-  return resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+  return resolve(dirname(fileURLToPath(import.meta.url)), '..');
 }
 
 function normalizeRuntimeConfig(rawConfig, configPath) {
