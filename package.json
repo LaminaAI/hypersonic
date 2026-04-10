@@ -24,9 +24,10 @@
     "README.md"
   ],
   "scripts": {
-    "test:smoke": "node --check cli/hypersonic-runtime.mjs && node --check cli/hypersonic-runtime-lib.mjs && node --check cli/hypersonic.mjs && bash -n hooks/session-start.sh scripts/hypersonic-common.sh scripts/hypersonic-loop.sh scripts/hypersonic-loop-aider.sh scripts/hypersonic-loop-codex.sh scripts/hypersonic-loop-gemini.sh scripts/hypersonic-loop-opencode.sh",
-    "test:pack": "mkdir -p /tmp/hypersonic-npm-cache && npm_config_cache=/tmp/hypersonic-npm-cache npm pack --dry-run",
-    "prepublishOnly": "npm run test:smoke && npm run test:pack"
+    "test:unit": "node tests/runtime-lib.test.mjs",
+    "test:smoke": "node scripts/test-smoke.mjs",
+    "test:pack": "node scripts/test-pack.mjs",
+    "prepublishOnly": "npm run test:unit && npm run test:smoke && npm run test:pack"
   },
   "type": "module",
   "license": "MIT"
