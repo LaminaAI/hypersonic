@@ -4,10 +4,10 @@
 // Spin up multiple infinite autopilot agents, monitor them all from one terminal.
 // Zero dependencies — pure Node.js.
 
-import { spawn } from 'child_process';
-import { readFileSync, existsSync, watchFile, unwatchFile } from 'fs';
+import { execSync, spawn } from 'child_process';
+import { readFileSync, existsSync, statSync, watchFile, unwatchFile } from 'fs';
 import { createInterface } from 'readline';
-import { resolve, basename, dirname } from 'path';
+import { join, resolve, basename, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import {
   AUTOPILOT_LOG_FILE,
@@ -20,6 +20,147 @@ import {
   normalizeProjectPath,
   readAutopilotTelemetry,
 } from './hypersonic-runtime-lib.mjs';
+
+function isRegularFile(absPath) {
+  try {
+    return statSync(absPath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `where.exe` often lists nvm’s `...\nodejs\gemini` first (not a real file). npm’s shim is usually `gemini.cmd`
+ * under the global bin dir — use isFile() and fall back to `npm bin -g`.
+ */
+function pickExistingWindowsExecutable(candidate) {
+  if (!candidate) return null;
+  // Already a full path with extension
+  if (/\.(exe|cmd|bat|ps1)$/i.test(candidate) && isRegularFile(candidate)) return candidate;
+  // Never return extensionless `...\gemini` from `where` — nvm often lists stubs that spawn() cannot run; prefer .cmd.
+  for (const ext of ['.cmd', '.exe', '.bat']) {
+    const withExt = `${candidate}${ext}`;
+    if (isRegularFile(withExt)) return withExt;
+  }
+  return null;
+}
+
+function resolveFromNpmGlobalBin(cmd) {
+  const tryDir = (binDir) => {
+    if (!binDir) return null;
+    const ordered = [join(binDir, `${cmd}.cmd`), join(binDir, `${cmd}.exe`), join(binDir, cmd)];
+    for (const abs of ordered) {
+      if (isRegularFile(abs)) return abs;
+    }
+    return null;
+  };
+
+  try {
+    if (process.platform === 'win32' && process.env.APPDATA) {
+      const fromRoaming = tryDir(join(process.env.APPDATA, 'npm'));
+      if (fromRoaming) return fromRoaming;
+    }
+
+    let binDir = '';
+    try {
+      binDir = execSync('npm bin -g', {
+        encoding: 'utf-8',
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+        .split(/\r?\n/)[0]
+        .trim();
+    } catch {
+      binDir = '';
+    }
+    const fromBin = tryDir(binDir);
+    if (fromBin) return fromBin;
+
+    const prefix = execSync('npm prefix -g', {
+      encoding: 'utf-8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+      .split(/\r?\n/)[0]
+      .trim();
+    if (!prefix) return null;
+    // Windows global shims (gemini.cmd) usually live in prefix; Unix uses prefix/bin.
+    const fallbackDir = process.platform === 'win32' ? prefix : join(prefix, 'bin');
+    return tryDir(fallbackDir);
+  } catch {
+    /* npm not on PATH or failed */
+  }
+  return null;
+}
+
+/** Windows: resolve CLI name to a real file so spawn() does not ENOENT on npm / nvm shims. */
+function resolveSpawnCommand(cmd) {
+  if (process.platform !== 'win32') return cmd;
+  const fromNpm = resolveFromNpmGlobalBin(cmd);
+  if (fromNpm) return fromNpm;
+  try {
+    const out = execSync(`where.exe ${cmd}`, {
+      encoding: 'utf-8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const candidates = String(out)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    for (const line of candidates) {
+      const resolved = pickExistingWindowsExecutable(line);
+      if (resolved) return resolved;
+    }
+  } catch {
+    /* where failed */
+  }
+  return cmd;
+}
+
+/** Run Gemini via `node …/bundle/gemini.js` so long prompts are not parsed by `cmd.exe` (`>`, `|`, etc.). */
+function tryResolveGeminiCliJs() {
+  try {
+    const root = execSync('npm root -g', {
+      encoding: 'utf-8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+      .split(/\r?\n/)[0]
+      .trim();
+    if (!root) return null;
+    const pkgPath = join(root, '@google', 'gemini-cli', 'package.json');
+    if (!isRegularFile(pkgPath)) return null;
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+    const rel = typeof pkg.bin === 'object' && pkg.bin !== null ? pkg.bin.gemini : pkg.bin;
+    if (!rel || typeof rel !== 'string') return null;
+    const abs = resolve(join(root, '@google', 'gemini-cli', rel));
+    return isRegularFile(abs) ? abs : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `.cmd`/`.bat` shims must be launched via `cmd.exe /c` — never `shell: true` (it breaks argv and confuses CLIs like Gemini). */
+function isWindowsCmdOrBat(executable) {
+  return process.platform === 'win32' && /\.(cmd|bat)$/i.test(executable);
+}
+
+/** One argv token for `cmd.exe /c` (double-quote rules; newlines → space so the line is one command). */
+function quoteTokenForCmdExe(arg) {
+  const s = String(arg).replace(/\r?\n/g, ' ');
+  if (s === '') return '""';
+  if (!/[\s&|<>^"%!]/.test(s)) return s;
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+function spawnPlatformCli(resolvedCmd, args, options) {
+  if (!isWindowsCmdOrBat(resolvedCmd)) {
+    return spawn(resolvedCmd, args, { ...options, shell: false });
+  }
+  const line = [quoteTokenForCmdExe(resolvedCmd), ...args.map(quoteTokenForCmdExe)].join(' ');
+  return spawn('cmd.exe', ['/d', '/s', '/c', line], { ...options, shell: false });
+}
 
 // ── ANSI helpers ──
 const ESC = '\x1b[';
@@ -146,12 +287,23 @@ function spawnAgent(agent) {
   }
 
   const { cmd, args } = config;
+  let resolvedCmd = resolveSpawnCommand(cmd);
+  let spawnArgs = args;
+
+  if (agent.platform === 'gemini') {
+    const geminiJs = tryResolveGeminiCliJs();
+    if (geminiJs) {
+      resolvedCmd = process.execPath;
+      spawnArgs = [geminiJs, ...args];
+    }
+  }
 
   try {
-    agent.process = spawn(cmd, args, {
+    agent.process = spawnPlatformCli(resolvedCmd, spawnArgs, {
       cwd: agent.project,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env },
+      windowsHide: process.platform === 'win32',
     });
 
     agent.process.stdout.on('data', (data) => {
@@ -191,7 +343,7 @@ function spawnAgent(agent) {
       agent.status = 'error';
       agent.log.push({
         time: new Date(),
-        text: `${RED}Failed to spawn ${cmd}: ${err.message}${RESET}`
+        text: `${RED}Failed to spawn ${cmd} (${resolvedCmd}): ${err.message}${RESET}`
       });
     });
 
