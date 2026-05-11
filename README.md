@@ -186,9 +186,20 @@ Start a new session and ask for something. The agent will classify the velocity 
 
 ## Testing
 
-There is no formal unit test suite yet. Right now the release gate should be smoke tests plus packaging checks.
+Hypersonic now has a small formal runtime test suite in addition to smoke and packaging checks.
 
-### 1. Runtime and shell smoke tests
+### 1. Runtime unit tests
+
+```bash
+npm run test:unit
+```
+
+This verifies:
+- autopilot log telemetry parsing
+- autopilot state parsing
+- repo telemetry hydration from working files
+
+### 2. Runtime and shell smoke tests
 
 ```bash
 npm run test:smoke
@@ -196,9 +207,9 @@ npm run test:smoke
 
 This verifies:
 - Node syntax for the CLI files
-- Shell syntax for hooks and loop scripts
+- Shell syntax for hooks and loop scripts when `bash` is available (CRLF line endings are normalized in the smoke runner so heredocs still parse on Windows checkouts)
 
-### 2. Packaging check
+### 3. Packaging check
 
 ```bash
 npm run test:pack
@@ -206,7 +217,7 @@ npm run test:pack
 
 This verifies the npm tarball can be built and that the expected files are included.
 
-### 3. Manual behavior checks
+### 4. Manual behavior checks
 
 Recommended manual checks before release:
 
@@ -217,6 +228,9 @@ node cli/hypersonic.mjs --help
 # Runtime contract
 node cli/hypersonic-runtime.mjs contract --project .
 
+# Runtime telemetry JSON
+node cli/hypersonic-runtime.mjs telemetry --project .
+
 # Runtime env output
 node cli/hypersonic-runtime.mjs env --project .
 
@@ -224,7 +238,7 @@ node cli/hypersonic-runtime.mjs env --project .
 sh hooks/session-start.sh | sed -n '1,18p'
 ```
 
-### 4. Skill testing
+### 5. Skill testing
 
 The skills are prompt assets, so the best test is behavior-level testing in a fresh agent session.
 
@@ -250,6 +264,7 @@ If you want `npx hypersonic` to work for other people, yes: this should be publi
 2. Run:
 
 ```bash
+npm run test:unit
 npm run test:smoke
 npm run test:pack
 ```

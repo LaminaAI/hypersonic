@@ -5,6 +5,7 @@ import {
   buildAutopilotPrompt,
   loadRuntimeConfig,
   normalizeProjectPath,
+  readAutopilotTelemetry,
   toShellEnv,
 } from './hypersonic-runtime-lib.mjs';
 
@@ -52,7 +53,11 @@ switch (command) {
     process.stdout.write(`${buildParameterContract(runtimeConfig.defaults, { autopilot: Boolean(args.autopilot) })}\n`);
     break;
 
+  case 'telemetry':
+    process.stdout.write(`${JSON.stringify(readAutopilotTelemetry(projectDir), null, 2)}\n`);
+    break;
+
   default:
-    process.stderr.write('Usage: hypersonic-runtime.mjs <env|prompt|contract> [--project dir] [--config path] [--vision text] [--plan path] [--autopilot]\n');
+    process.stderr.write('Usage: hypersonic-runtime.mjs <env|prompt|contract|telemetry> [--project dir] [--config path] [--vision text] [--plan path] [--autopilot]\n');
     process.exit(1);
 }

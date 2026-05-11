@@ -1,7 +1,7 @@
 #!/bin/bash
 
 HYPERSONIC_COMMON_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-HYPERSONIC_REPO_ROOT="$(CDPATH= cd -- "$HYPERSONIC_COMMON_DIR/../.." && pwd)"
+HYPERSONIC_REPO_ROOT="$(CDPATH= cd -- "$HYPERSONIC_COMMON_DIR/.." && pwd)"
 HYPERSONIC_RUNTIME_CLI="$HYPERSONIC_REPO_ROOT/cli/hypersonic-runtime.mjs"
 
 hs_load_runtime_env() {

@@ -4,20 +4,163 @@
 // Spin up multiple infinite autopilot agents, monitor them all from one terminal.
 // Zero dependencies — pure Node.js.
 
-import { spawn } from 'child_process';
-import { readFileSync, existsSync, watchFile, unwatchFile } from 'fs';
+import { execSync, spawn } from 'child_process';
+import { readFileSync, existsSync, statSync, watchFile, unwatchFile } from 'fs';
 import { createInterface } from 'readline';
-import { resolve, basename, dirname } from 'path';
+import { join, resolve, basename, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import {
   AUTOPILOT_LOG_FILE,
   buildAutopilotPrompt,
   DEFAULT_RUNTIME_CONFIG,
   findAutopilotLogFile,
+  findAutopilotStateFile,
   formatRuntimeParameters,
   loadRuntimeConfig,
   normalizeProjectPath,
+  readAutopilotTelemetry,
 } from './hypersonic-runtime-lib.mjs';
+
+function isRegularFile(absPath) {
+  try {
+    return statSync(absPath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `where.exe` often lists nvm’s `...\nodejs\gemini` first (not a real file). npm’s shim is usually `gemini.cmd`
+ * under the global bin dir — use isFile() and fall back to `npm bin -g`.
+ */
+function pickExistingWindowsExecutable(candidate) {
+  if (!candidate) return null;
+  // Already a full path with extension
+  if (/\.(exe|cmd|bat|ps1)$/i.test(candidate) && isRegularFile(candidate)) return candidate;
+  // Never return extensionless `...\gemini` from `where` — nvm often lists stubs that spawn() cannot run; prefer .cmd.
+  for (const ext of ['.cmd', '.exe', '.bat']) {
+    const withExt = `${candidate}${ext}`;
+    if (isRegularFile(withExt)) return withExt;
+  }
+  return null;
+}
+
+function resolveFromNpmGlobalBin(cmd) {
+  const tryDir = (binDir) => {
+    if (!binDir) return null;
+    const ordered = [join(binDir, `${cmd}.cmd`), join(binDir, `${cmd}.exe`), join(binDir, cmd)];
+    for (const abs of ordered) {
+      if (isRegularFile(abs)) return abs;
+    }
+    return null;
+  };
+
+  try {
+    if (process.platform === 'win32' && process.env.APPDATA) {
+      const fromRoaming = tryDir(join(process.env.APPDATA, 'npm'));
+      if (fromRoaming) return fromRoaming;
+    }
+
+    let binDir = '';
+    try {
+      binDir = execSync('npm bin -g', {
+        encoding: 'utf-8',
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+        .split(/\r?\n/)[0]
+        .trim();
+    } catch {
+      binDir = '';
+    }
+    const fromBin = tryDir(binDir);
+    if (fromBin) return fromBin;
+
+    const prefix = execSync('npm prefix -g', {
+      encoding: 'utf-8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+      .split(/\r?\n/)[0]
+      .trim();
+    if (!prefix) return null;
+    // Windows global shims (gemini.cmd) usually live in prefix; Unix uses prefix/bin.
+    const fallbackDir = process.platform === 'win32' ? prefix : join(prefix, 'bin');
+    return tryDir(fallbackDir);
+  } catch {
+    /* npm not on PATH or failed */
+  }
+  return null;
+}
+
+/** Windows: resolve CLI name to a real file so spawn() does not ENOENT on npm / nvm shims. */
+function resolveSpawnCommand(cmd) {
+  if (process.platform !== 'win32') return cmd;
+  const fromNpm = resolveFromNpmGlobalBin(cmd);
+  if (fromNpm) return fromNpm;
+  try {
+    const out = execSync(`where.exe ${cmd}`, {
+      encoding: 'utf-8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const candidates = String(out)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    for (const line of candidates) {
+      const resolved = pickExistingWindowsExecutable(line);
+      if (resolved) return resolved;
+    }
+  } catch {
+    /* where failed */
+  }
+  return cmd;
+}
+
+/** Run Gemini via `node …/bundle/gemini.js` so long prompts are not parsed by `cmd.exe` (`>`, `|`, etc.). */
+function tryResolveGeminiCliJs() {
+  try {
+    const root = execSync('npm root -g', {
+      encoding: 'utf-8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+      .split(/\r?\n/)[0]
+      .trim();
+    if (!root) return null;
+    const pkgPath = join(root, '@google', 'gemini-cli', 'package.json');
+    if (!isRegularFile(pkgPath)) return null;
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+    const rel = typeof pkg.bin === 'object' && pkg.bin !== null ? pkg.bin.gemini : pkg.bin;
+    if (!rel || typeof rel !== 'string') return null;
+    const abs = resolve(join(root, '@google', 'gemini-cli', rel));
+    return isRegularFile(abs) ? abs : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `.cmd`/`.bat` shims must be launched via `cmd.exe /c` — never `shell: true` (it breaks argv and confuses CLIs like Gemini). */
+function isWindowsCmdOrBat(executable) {
+  return process.platform === 'win32' && /\.(cmd|bat)$/i.test(executable);
+}
+
+/** One argv token for `cmd.exe /c` (double-quote rules; newlines → space so the line is one command). */
+function quoteTokenForCmdExe(arg) {
+  const s = String(arg).replace(/\r?\n/g, ' ');
+  if (s === '') return '""';
+  if (!/[\s&|<>^"%!]/.test(s)) return s;
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+function spawnPlatformCli(resolvedCmd, args, options) {
+  if (!isWindowsCmdOrBat(resolvedCmd)) {
+    return spawn(resolvedCmd, args, { ...options, shell: false });
+  }
+  const line = [quoteTokenForCmdExe(resolvedCmd), ...args.map(quoteTokenForCmdExe)].join(' ');
+  return spawn('cmd.exe', ['/d', '/s', '/c', line], { ...options, shell: false });
+}
 
 // ── ANSI helpers ──
 const ESC = '\x1b[';
@@ -76,8 +219,17 @@ function createAgent(config) {
     sessions: 0,
     iterations: 0,
     commits: 0,
+    discarded: 0,
+    successRate: null,
+    throughputPerHour: 0,
     lastCommit: '—',
+    lastOutcome: 'unknown',
+    lastSummary: '',
+    lastArea: null,
+    recentEvents: [],
     lastActivity: new Date(),
+    currentPhase: '',
+    nextAction: '',
     log: [],
     startTime: new Date(),
   };
@@ -135,12 +287,23 @@ function spawnAgent(agent) {
   }
 
   const { cmd, args } = config;
+  let resolvedCmd = resolveSpawnCommand(cmd);
+  let spawnArgs = args;
+
+  if (agent.platform === 'gemini') {
+    const geminiJs = tryResolveGeminiCliJs();
+    if (geminiJs) {
+      resolvedCmd = process.execPath;
+      spawnArgs = [geminiJs, ...args];
+    }
+  }
 
   try {
-    agent.process = spawn(cmd, args, {
+    agent.process = spawnPlatformCli(resolvedCmd, spawnArgs, {
       cwd: agent.project,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env },
+      windowsHide: process.platform === 'win32',
     });
 
     agent.process.stdout.on('data', (data) => {
@@ -180,7 +343,7 @@ function spawnAgent(agent) {
       agent.status = 'error';
       agent.log.push({
         time: new Date(),
-        text: `${RED}Failed to spawn ${cmd}: ${err.message}${RESET}`
+        text: `${RED}Failed to spawn ${cmd} (${resolvedCmd}): ${err.message}${RESET}`
       });
     });
 
@@ -195,29 +358,40 @@ function spawnAgent(agent) {
 
 function watchAgentLog(agent) {
   const logPath = findAutopilotLogFile(agent.project);
+  const statePath = findAutopilotStateFile(agent.project);
+  const watchPaths = [...new Set([logPath, statePath])];
 
-  const parseLog = () => {
-    if (!existsSync(logPath)) return;
+  const refreshTelemetry = () => {
+    if (!existsSync(agent.project)) return;
     try {
-      const content = readFileSync(logPath, 'utf-8');
-      // Count iterations from the table
-      const iterationMatches = content.match(/\| \d+ \|/g);
-      if (iterationMatches) agent.iterations = iterationMatches.length;
-      // Count commits (✅ in kept column)
-      const commitMatches = content.match(/✅/g);
-      if (commitMatches) agent.commits = commitMatches.length;
-      // Get last commit hash
-      const hashMatch = content.match(/([a-f0-9]{7})\s*\|?\s*$/gm);
-      if (hashMatch) {
-        const last = hashMatch[hashMatch.length - 1].trim().replace(/\|/g, '').trim();
-        if (last.length === 7) agent.lastCommit = last;
-      }
-    } catch (e) { /* ignore read errors */ }
+      const telemetry = readAutopilotTelemetry(agent.project);
+      agent.iterations = telemetry.iterations;
+      agent.commits = telemetry.commits;
+      agent.discarded = telemetry.discarded;
+      agent.successRate = telemetry.successRate;
+      agent.throughputPerHour = telemetry.throughputPerHour;
+      agent.lastCommit = telemetry.lastCommit;
+      agent.lastOutcome = telemetry.lastOutcome;
+      agent.lastSummary = telemetry.lastSummary || '';
+      agent.lastArea = telemetry.lastArea;
+      agent.recentEvents = telemetry.events.slice(-6);
+      agent.currentPhase = firstLine(telemetry.state.currentPhase) || '';
+      agent.nextAction = firstLine(telemetry.state.nextAction) || '';
+    } catch {
+      /* ignore read errors */
+    }
   };
 
-  parseLog();
-  watchFile(logPath, { interval: 3000 }, parseLog);
-  agent._logWatcher = logPath;
+  refreshTelemetry();
+  agent._telemetryWatchPaths = [];
+  for (const p of watchPaths) {
+    try {
+      watchFile(p, { interval: 3000 }, refreshTelemetry);
+      agent._telemetryWatchPaths.push(p);
+    } catch {
+      /* ignore watch setup errors */
+    }
+  }
 }
 
 function killAgent(id) {
@@ -230,7 +404,15 @@ function killAgent(id) {
       if (agent.process) agent.process.kill('SIGKILL');
     }, 2000);
   }
-  if (agent._logWatcher) unwatchFile(agent._logWatcher);
+  if (agent._telemetryWatchPaths?.length) {
+    for (const p of agent._telemetryWatchPaths) {
+      try {
+        unwatchFile(p);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
   agents.delete(id);
 }
 
@@ -239,10 +421,14 @@ function renderDashboard() {
   const rows = process.stdout.rows || 40;
   const cols = process.stdout.columns || 120;
   let out = CLEAR;
+  const summary = summarizeAgents();
 
   // Header
   out += `${BG_BLACK}${BOLD}${CYAN} ⚡ HYPERSONIC MISSION CONTROL ${RESET}`;
   out += `${DIM} ${agents.size} agent(s) | ${new Date().toLocaleTimeString()}${RESET}\n`;
+  if (agents.size > 0) {
+    out += `${DIM} ${summary.running} running | ${summary.restarting} restarting | ${summary.sessions} sessions | ${summary.iterations} iterations | ${summary.kept} kept | ${summary.discarded} discarded | ${summary.throughputLabel}${RESET}\n`;
+  }
   out += `${DIM}${'─'.repeat(Math.min(cols, 100))}${RESET}\n`;
 
   if (agents.size === 0) {
@@ -256,7 +442,7 @@ function renderDashboard() {
   } else {
     // Agent table
     out += `\n`;
-    out += `  ${BOLD}${DIM}ID  STATUS       PLATFORM  SESSIONS  ITERATIONS  COMMITS  PROJECT${RESET}\n`;
+    out += `  ${BOLD}${DIM}ID  STATUS       PLATFORM  ITER  KEEP%  SPD/H  PROJECT${RESET}\n`;
 
     for (const [id, a] of agents) {
       const statusColor = a.status === 'running' ? GREEN
@@ -271,9 +457,9 @@ function renderDashboard() {
       out += `${WHITE}${String(a.id).padEnd(4)}`;
       out += `${statusColor}${a.status.padEnd(13)}${RESET}${highlight}`;
       out += `${a.platform.padEnd(10)}`;
-      out += `${String(a.sessions).padEnd(10)}`;
-      out += `${String(a.iterations).padEnd(12)}`;
-      out += `${String(a.commits).padEnd(9)}`;
+      out += `${String(a.iterations).padEnd(6)}`;
+      out += `${formatPercent(a.successRate).padEnd(7)}`;
+      out += `${formatSpeed(a.throughputPerHour).padEnd(7)}`;
       out += `${DIM}${basename(a.project)}${RESET}`;
       out += `\n`;
     }
@@ -292,7 +478,17 @@ function renderDashboard() {
       if (a.configPath) {
         out += `  ${DIM}Config:${RESET} ${a.configPath}\n`;
       }
+      if (a.currentPhase) {
+        out += `  ${DIM}Phase:${RESET}  ${normalizeDashboardText(a.currentPhase).substring(0, Math.max(cols - 18, 24))}\n`;
+      }
+      if (a.nextAction) {
+        out += `  ${DIM}Next:${RESET}   ${a.nextAction.substring(0, Math.max(cols - 20, 20))}\n`;
+      }
       out += `  ${DIM}Uptime:${RESET} ${uptime}min | ${DIM}Last activity:${RESET} ${sinceActivity}s ago\n`;
+      out += `  ${DIM}Score:${RESET}  ${a.commits} kept / ${a.discarded} discarded | ${DIM}Keep rate:${RESET} ${formatPercent(a.successRate)} | ${DIM}Speed:${RESET} ${formatSpeed(a.throughputPerHour)}/h | ${DIM}Last commit:${RESET} ${a.lastCommit}\n`;
+      if (a.lastSummary) {
+        out += `  ${DIM}Latest:${RESET} ${formatOutcomeBadge(a.lastOutcome)} ${a.lastArea ? `${a.lastArea} ` : ''}${a.lastSummary.substring(0, Math.max(cols - 30, 20))}\n`;
+      }
 
       // Last N log lines
       out += `\n  ${BOLD}Recent output:${RESET}\n`;
@@ -301,6 +497,21 @@ function renderDashboard() {
         const time = line.time.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
         const text = line.text.substring(0, cols - 14);
         out += `  ${DIM}${time}${RESET} ${text}\n`;
+      }
+    }
+
+    const timeline = buildMissionTimeline(8);
+    if (timeline.length > 0) {
+      out += `\n${DIM}${'-'.repeat(Math.min(cols, 100))}${RESET}\n`;
+      out += `  ${BOLD}Mission Timeline:${RESET}\n`;
+      for (const event of timeline) {
+        const when = event.timestamp
+          ? event.timestamp.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+          : '--:--:--';
+        const projectName = basename(event.project);
+        const badge = event.outcome === 'kept' ? `${GREEN}KEEP${RESET}` : `${RED}DROP${RESET}`;
+        const summaryText = `${projectName} ${badge} ${event.area ? `${event.area} ` : ''}${event.summary || ''}`.trim();
+        out += `  ${DIM}${when}${RESET} ${summaryText.substring(0, cols - 14)}\n`;
       }
     }
   }
@@ -314,7 +525,89 @@ function renderDashboard() {
   out += `${RESET}${BOLD}l${RESET}${DIM} view log  `;
   out += `${RESET}${BOLD}q${RESET}${DIM} quit${RESET}\n`;
 
-  process.stdout.write(out);
+  process.stdout.write(normalizeDashboardText(out));
+}
+
+function normalizeDashboardText(value) {
+  return String(value)
+    .replaceAll('Ã¢â‚¬â€', '-')
+    .replaceAll('Ã¢â€â‚¬', '-')
+    .replaceAll('â€”', '-')
+    .replaceAll('â"€', '-')
+    .replaceAll('\u2014', '-')
+    .replaceAll('\u2500', '-');
+}
+
+function summarizeAgents() {
+  let running = 0;
+  let restarting = 0;
+  let sessions = 0;
+  let iterations = 0;
+  let kept = 0;
+  let discarded = 0;
+  let throughputPerHour = 0;
+
+  for (const agent of agents.values()) {
+    if (agent.status === 'running') running++;
+    if (agent.status === 'restarting') restarting++;
+    sessions += agent.sessions;
+    iterations += agent.iterations;
+    kept += agent.commits;
+    discarded += agent.discarded;
+    throughputPerHour += agent.throughputPerHour || 0;
+  }
+
+  return {
+    running,
+    restarting,
+    sessions,
+    iterations,
+    kept,
+    discarded,
+    throughputLabel: `${formatSpeed(throughputPerHour)}/h`,
+  };
+}
+
+function buildMissionTimeline(limit = 8) {
+  const events = [];
+
+  for (const agent of agents.values()) {
+    for (const event of agent.recentEvents || []) {
+      events.push({
+        ...event,
+        project: agent.project,
+        agentId: agent.id,
+      });
+    }
+  }
+
+  return events
+    .sort((left, right) => {
+      const leftTime = left.timestamp ? left.timestamp.getTime() : 0;
+      const rightTime = right.timestamp ? right.timestamp.getTime() : 0;
+      return rightTime - leftTime;
+    })
+    .slice(0, limit);
+}
+
+function formatPercent(value) {
+  if (value === null || value === undefined) return '-';
+  return `${Math.round(value * 100)}%`;
+}
+
+function formatSpeed(value) {
+  const numeric = Number(value || 0);
+  return (Math.round(numeric * 10) / 10).toFixed(1);
+}
+
+function formatOutcomeBadge(outcome) {
+  if (outcome === 'kept') return `${GREEN}KEEP${RESET}`;
+  if (outcome === 'discarded') return `${RED}DROP${RESET}`;
+  return `${DIM}-${RESET}`;
+}
+
+function firstLine(value) {
+  return String(value || '').split(/\r?\n/).map((line) => line.trim()).find(Boolean) || '';
 }
 
 // ── Interactive menu for adding agents ──

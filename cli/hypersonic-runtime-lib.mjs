@@ -125,6 +125,85 @@ export function findAutopilotLogFile(projectDir) {
   return preferred;
 }
 
+export function readAutopilotTelemetry(projectDir, { now = new Date() } = {}) {
+  const logPath = findAutopilotLogFile(projectDir);
+  const statePath = findAutopilotStateFile(projectDir);
+
+  let logContent = '';
+  let stateContent = '';
+
+  try {
+    if (existsSync(logPath)) {
+      logContent = readFileSync(logPath, 'utf-8');
+    }
+  } catch {
+    logContent = '';
+  }
+
+  try {
+    if (existsSync(statePath)) {
+      stateContent = readFileSync(statePath, 'utf-8');
+    }
+  } catch {
+    stateContent = '';
+  }
+
+  return {
+    logPath,
+    statePath,
+    ...parseAutopilotLog(logContent, { now }),
+    state: parseAutopilotState(stateContent),
+  };
+}
+
+export function parseAutopilotLog(content, { now = new Date() } = {}) {
+  const lines = String(content || '').split(/\r?\n/);
+  const events = [];
+
+  for (const line of lines) {
+    const parsed = parseAutopilotLogLine(line, now);
+    if (parsed) {
+      events.push(parsed);
+    }
+  }
+
+  const keptEvents = events.filter((event) => event.outcome === 'kept');
+  const discardedEvents = events.filter((event) => event.outcome === 'discarded');
+  const lastEvent = events[events.length - 1] || null;
+  const lastKeptEvent = keptEvents[keptEvents.length - 1] || null;
+  const activeWindowHours = computeActiveWindowHours(events, now);
+
+  return {
+    iterations: events.length,
+    kept: keptEvents.length,
+    discarded: discardedEvents.length,
+    commits: keptEvents.length,
+    successRate: events.length > 0 ? keptEvents.length / events.length : null,
+    throughputPerHour: activeWindowHours > 0 ? roundTo(keptEvents.length / activeWindowHours, 2) : 0,
+    lastCommit: lastKeptEvent?.commit || '—',
+    lastOutcome: lastEvent?.outcome || 'unknown',
+    lastArea: lastEvent?.area || null,
+    lastSummary: lastEvent?.summary || null,
+    lastTimestamp: lastEvent?.timestamp || null,
+    events,
+  };
+}
+
+export function parseAutopilotState(content) {
+  const text = String(content || '');
+  return {
+    vision: readMarkdownSection(text, 'Vision'),
+    planFile: readMarkdownSection(text, 'Plan file'),
+    currentPhase: readMarkdownSection(text, 'Current phase'),
+    nextAction: readMarkdownSection(text, 'Next action'),
+    lastCompletedChange: readMarkdownSection(text, 'Last completed change'),
+    openBlockers: readMarkdownListSection(text, 'Open blockers'),
+    rankedCandidates: readMarkdownListSection(text, 'Ranked next candidates'),
+    criticalRepoKnowledge: readMarkdownListSection(text, 'Critical repo knowledge'),
+    resumeNotes: readMarkdownSection(text, 'Resume notes'),
+  };
+}
+
 export function formatRuntimeParameters(defaults) {
   return [
     `velocity=${defaults.velocity}`,
@@ -301,6 +380,181 @@ function parseScalar(value) {
   if (/^-?\d+$/.test(value)) return Number(value);
 
   return value;
+}
+
+function parseMarkdownTableRow(line, now) {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('|')) return null;
+
+  const parts = trimmed.split('|').map((segment) => segment.trim());
+  if (parts.length < 3) return null;
+
+  const inner = parts.slice(1, -1);
+  if (inner.length < 4) return null;
+
+  const firstCell = inner[0].toLowerCase();
+  if (firstCell === 'iter' || firstCell.startsWith('#')) return null;
+  if (inner.every((cell) => /^[-:\s|]+$/.test(cell) || /^-+$/.test(cell.replace(/\s+/g, '')))) {
+    return null;
+  }
+
+  const rowText = inner.join(' ');
+  const normalized = normalizeLogDecorators(rowText);
+  const outcome = detectOutcome(normalized);
+  if (!outcome) return null;
+
+  const timeToken = rowText.match(/\b\d{2}:\d{2}:\d{2}\b/)?.[0] || null;
+  const timestamp = timeToken ? coerceTimeToDate(timeToken, now) : null;
+
+  const tierCell = inner.find((cell) => /^T[1-6]$/i.test(cell));
+  const area = tierCell ? tierCell.toUpperCase() : null;
+
+  let commit = null;
+  for (const cell of inner) {
+    const match = cell.match(/\b[0-9a-f]{7,40}\b/i);
+    if (match) {
+      commit = match[0].slice(0, 7);
+      break;
+    }
+  }
+
+  const summary = inner
+    .filter((cell) => {
+      if (!cell) return false;
+      if (/\b\d{2}:\d{2}:\d{2}\b/.test(cell)) return false;
+      if (/^T[1-6]$/i.test(cell)) return false;
+      if (/^\d+$/.test(cell)) return false;
+      if (/\b(kept|discarded)\b/i.test(cell) && cell.length <= 14) return false;
+      if (/^[0-9a-f]{7,40}$/i.test(cell)) return false;
+      return true;
+    })
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return {
+    raw: line,
+    outcome,
+    timestamp,
+    commit,
+    area,
+    summary: summary || (outcome === 'kept' ? 'Kept iteration' : 'Discarded iteration'),
+  };
+}
+
+function parseAutopilotLogLine(line, now) {
+  const text = line.trim();
+  if (!text) return null;
+
+  if (text.startsWith('|')) {
+    const tableRow = parseMarkdownTableRow(line, now);
+    if (tableRow) return tableRow;
+  }
+
+  const normalized = normalizeLogDecorators(text);
+  const outcome = detectOutcome(normalized);
+  if (!outcome) return null;
+
+  const timestampToken = normalized.match(/\b\d{2}:\d{2}:\d{2}\b/)?.[0] || null;
+  const timestamp = timestampToken ? coerceTimeToDate(timestampToken, now) : null;
+  const commit = normalized.match(/\b[0-9a-f]{7,40}\b/i)?.[0]?.slice(0, 7) || null;
+  const area = normalized.match(/\bT[1-6]\b/i)?.[0]?.toUpperCase() || null;
+
+  let summary = normalized;
+  if (timestampToken) {
+    summary = summary.replace(timestampToken, '').trim();
+  }
+  summary = summary
+    .replace(/\b(kept|discarded)\b/gi, '')
+    .replace(/\bcommit(?:ted)?\b/gi, '')
+    .replace(/\b[0-9a-f]{7,40}\b/gi, '')
+    .replace(/\bT[1-6]\b\s*:?/gi, '')
+    .replace(/[|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/^[—\-:| ]+/, '')
+    .trim();
+
+  if (!summary) {
+    summary = outcome === 'kept' ? 'Kept iteration' : 'Discarded iteration';
+  }
+
+  return {
+    raw: line,
+    outcome,
+    timestamp,
+    commit,
+    area,
+    summary,
+  };
+}
+
+function normalizeLogDecorators(line) {
+  return line
+    .replace(/[|]/g, ' | ')
+    .replace(/[✅✔☑]/g, ' kept ')
+    .replace(/[❌✖✗]/g, ' discarded ')
+    .replace(/\bkept\b/gi, ' kept ')
+    .replace(/\bdiscard(?:ed|ing)?\b/gi, ' discarded ')
+    .replace(/\bno improvement\b/gi, ' discarded ')
+    .replace(/\brolled back\b/gi, ' discarded ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function detectOutcome(line) {
+  if (/\bdiscarded\b/i.test(line)) return 'discarded';
+  if (/\bkept\b/i.test(line)) return 'kept';
+  return null;
+}
+
+function coerceTimeToDate(token, now) {
+  const match = token.match(/^(\d{2}):(\d{2}):(\d{2})$/);
+  if (!match) return null;
+
+  const [, hh, mm, ss] = match;
+  const timestamp = new Date(now);
+  timestamp.setHours(Number(hh), Number(mm), Number(ss), 0);
+  return timestamp;
+}
+
+function computeActiveWindowHours(events, now) {
+  const timestamps = events.map((event) => event.timestamp).filter(Boolean);
+  if (timestamps.length === 0) return 0;
+
+  const first = timestamps[0].getTime();
+  const last = (timestamps[timestamps.length - 1] || now).getTime();
+  const elapsedMs = Math.max(last - first, 60000);
+  return elapsedMs / 3600000;
+}
+
+function roundTo(value, places) {
+  const factor = 10 ** places;
+  return Math.round(value * factor) / factor;
+}
+
+function readMarkdownSection(content, heading) {
+  const escapedHeading = escapeRegex(heading);
+  const regex = new RegExp(`##\\s+${escapedHeading}\\s*\\n([\\s\\S]*?)(?=\\n##\\s+|$)`, 'i');
+  const match = content.match(regex);
+  if (!match) return '';
+  return match[1].trim();
+}
+
+function readMarkdownListSection(content, heading) {
+  const section = readMarkdownSection(content, heading);
+  if (!section) return [];
+
+  return section
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^[-*]\s+/, '').replace(/^\d+\.\s+/, '').trim())
+    .filter(Boolean)
+    .filter((line) => line.toLowerCase() !== 'none');
+}
+
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function normalizeEnum(value, validValues, fallback) {
