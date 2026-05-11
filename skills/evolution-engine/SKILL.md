@@ -1,144 +1,95 @@
 ---
 name: evolution-engine
-description: "Use after meaningful work to capture repo-specific knowledge in `.hypersonic/learned.md` and `.hypersonic/history.jsonl`. This skill is for durable learnings: conventions, gotchas, test patterns, architecture notes, and user preferences that will save time on future work."
+description: "Use after meaningful work to capture confirmed repo-specific knowledge in `.hypersonic/learned.md` and `.hypersonic/history.jsonl`: conventions, gotchas, test patterns, architecture notes, and user preferences."
 parameters:
   velocity: high
   rigor: medium
+  max_questions: 1
+  test_mode: none
   auto_commit: false
 ---
 
-# Evolution Engine — Keep What The Repo Teaches You
+# Evolution Engine - Keep What Compounds
 
-Most sessions learn something. Most sessions also forget it. This skill exists to keep the important lessons and drop the rest.
+Repo memory should make the next session faster and more accurate. It is not a diary.
 
-Capture only the repo knowledge that will actually help the next session.
+## Dials
 
----
+- Higher `velocity`: skip if nothing important was learned; keep entries short.
+- Higher `rigor`: merge duplicates, resolve contradictions, and sharpen stale entries.
+- `auto_commit`: include memory updates in the related verified commit only when appropriate.
 
-## How Parameters Change Behavior
-
-- `velocity=high`: skip this skill if nothing important was learned; keep entries short and high-signal
-- `velocity=medium|low`: spend a bit more time consolidating, deduplicating, and sharpening entries
-- `rigor=low`: record only the most important confirmed learnings
-- `rigor=medium`: also refine or merge nearby entries if that improves clarity
-- `rigor=high`: actively resolve contradictions, promote repeated gotchas into conventions, and tighten the knowledge base
-- `auto_commit=true`: if repo knowledge changed as part of a shipping workflow, include it in the same verified commit when appropriate
-- `auto_commit=false`: update knowledge files, but do not create a commit just for them unless the workflow or user asks
-
----
-
-## What Counts As A Real Learning
+## Record Only Real Learnings
 
 Good categories:
+
 - repo conventions
 - gotchas
 - test patterns
 - architecture notes
 - user or team preferences
 
-Good entries:
-- "Tests under `src/renderer/` require `renderer.flush()` before assertions or they flake."
-- "User prefers one logical commit per change, no squash."
+Good entry:
+
+- "`src/auth/session.ts` relies on Redis TTL for expiry; do not add manual timestamp checks unless that path changes. Learned 2026-03-24 from refresh bugfix."
 
 Bad entries:
+
 - "Need to be careful"
 - "Async is tricky"
 - "Project uses React"
+- "We changed the button today"
 
----
-
-## The Reflection Pass
+## Reflection Pass
 
 Ask:
+
 1. What bit me?
 2. What did the user correct?
 3. What pattern did I discover?
 
-If the answer to all three is "nothing useful," skip this skill.
+If none of those answers will help a future session, skip the update.
 
----
+## Update Flow
 
-## The Update Flow
+1. Read `.hypersonic/learned.md` if it exists.
+2. Check whether the learning already exists.
+3. Update, merge, or sharpen existing entries when cleaner than appending.
+4. Add the new learning only if it is confirmed and location-aware.
+5. Append a compact event to `.hypersonic/history.jsonl`.
 
-1. Read `.hypersonic/learned.md` if it exists
-2. Check whether the learning already exists
-3. Update, merge, or sharpen an existing entry if that is better than adding a new one
-4. Add the new learning if it is confirmed and useful
-5. Append a structured event to `.hypersonic/history.jsonl`
+Consolidate instead of growing a junk pile.
 
-Do not just append forever. Consolidate when it makes the knowledge base cleaner.
+Minimum history event:
 
----
+```json
+{"ts":"2026-05-11T20:00:00Z","kind":"learning","path_or_area":"src/auth","summary":"Session expiry relies on Redis TTL","source":"bugfix","commit":null}
+```
 
-## Write The Smallest Useful Entry
+## Entry Shape
 
-Each entry should answer:
-1. what the rule or learning is
-2. where it applies
-3. how you learned it
-4. when you learned it
+Each learning should answer:
 
-Good:
-- "**Session cache**: `src/auth/session.ts` assumes Redis TTL for expiry. Do not add manual timestamp checks unless the Redis path changes. _Learned: 2026-03-24 | Source: bugfix_"
+- what the rule or gotcha is
+- where it applies
+- how it was learned
+- when it was learned
 
----
+Use specific paths or areas when possible.
 
-## Files Used By This Skill
+## Files
 
-- `.hypersonic/learned.md` -> human-readable repo memory
-- `.hypersonic/history.jsonl` -> structured learning log
+- `.hypersonic/learned.md`: human-readable repo memory
+- `.hypersonic/history.jsonl`: structured learning log
 
-By default these should be committed repo knowledge, not local throwaway files.
+These are repo knowledge files by default. Do not commit local autopilot logs unless the user asks.
 
----
+## Avoid
 
-## Consolidate, Do Not Just Append
+- recording guesses as facts
+- generic advice with no location
+- task history instead of durable knowledge
+- append-only clutter
+- spending longer writing memory than the learning is worth
 
-If you notice:
-- duplicates
-- contradictions
-- stale file paths
-- repeated gotchas that are really conventions
-
-fix the knowledge base instead of adding more clutter.
-
-This skill is not a diary. It is a tool for future speed and accuracy.
-
----
-
-## Anti-Patterns
-
-**Speculative memory.** Do not record guesses as if they were facts.
-
-**Generic advice.** If the learning has no file, area, or condition, it is probably too vague.
-
-**Task history instead of repo knowledge.** Keep what should be remembered, not what happened once.
-
-**Append-only clutter.** If a new entry should replace or merge with an old one, do that.
-
-**Documentation overkill.** Do not spend longer writing memory than the learning is worth.
-
----
-
-## Anti-Rationalization Table
-
-| What you're thinking | What's actually true |
-|---|---|
-| "I learned something, I should probably write it down" | Only if it will help the next session. |
-| "I’ll just append this and clean it up later" | That is how knowledge files become junk piles. |
-| "This is obvious, so I don’t need the file path" | Without location, future agents cannot use it. |
-| "Maybe this matters" | If it is still a maybe, it is not ready to store as a rule. |
-| "I should log every little discovery" | High-signal memory beats high-volume memory. |
-
----
-
-## Completion Checklist
-
-Before you finish:
-
-1. The learning is confirmed, not guessed
-2. The entry is specific and location-aware
-3. The knowledge base is cleaner, not noisier
-4. The change fits the current `auto_commit` behavior
-
-The standard is simple: preserve the lessons that compound and skip the ones that do not.
+The standard: preserve lessons that compound and skip the rest.

@@ -1,6 +1,6 @@
 ---
 name: autopilot
-description: "Use when the user wants the agent to keep working without waiting for more input. Autopilot is always infinite. Phase 1 completes the given plan in order. Phase 2 keeps improving the repo toward the vision with one meaningful, verified change per iteration. Resume from `.hsonic-autopilot-state.md`, keep local history in `.hsonic-autopilot-log.md`, and continue until the human interrupts."
+description: "Use when the user wants the agent to keep working without waiting for input. Autopilot runs continuously: finish the given plan first, then keep making one meaningful verified improvement per iteration until interrupted."
 parameters:
   velocity: high
   rigor: medium
@@ -9,154 +9,90 @@ parameters:
   auto_commit: true
 ---
 
-# Autopilot — Infinite, But Not Aimless
+# Autopilot - Continuous, Not Aimless
 
-Autopilot is for long unattended runs. The human is away. You do not wait for approval. You decide, verify, checkpoint, and continue.
+Autopilot is for unattended work. Do not ask the human for input. Decide, verify, checkpoint, commit useful changes, and continue.
 
-Move continuously, but do not confuse motion with progress. Prefer fewer meaningful iterations over many shallow ones.
+## Dials
 
----
+- Higher `velocity`: smaller iterations and faster keep/discard decisions.
+- Higher `rigor`: stronger baselines, broader verification, fewer cosmetic changes.
+- `max_questions=0`: never block on a question.
+- `test_mode`: verification floor before keeping an iteration.
+- `auto_commit=true`: kept code changes must commit so progress can resume cleanly.
 
-## How Parameters Change Behavior
+## Local Files
 
-- `velocity=high`: prefer smaller meaningful iterations, shorter checkpoints, and faster keep-or-discard decisions
-- `velocity=medium|low`: allow deeper planning, larger iterations, and more deliberate backlog refreshes
-- `rigor=low`: keep checkpoints and verification minimal but honest
-- `rigor=medium`: use balanced baselines, balanced verification, and balanced iteration depth
-- `rigor=high`: use stronger baselines, broader verification, and avoid cosmetic or weak iterations
-- `max_questions=0`: do not ask the human anything during autopilot
-- `test_mode=none`: only keep a change if direct evidence proves it and the risk is acceptable
-- `test_mode=auto|relevant|full`: that verification depth is the minimum before keeping an iteration
-- `auto_commit=true`: kept iterations must commit so the loop can resume cleanly
+- `.hsonic-autopilot-state.md`: current checkpoint for resume
+- `.hsonic-autopilot-log.md`: local run history
+- `.hypersonic/learned.md`: repo knowledge shared across sessions
 
-Autopilot does not support "work forever but never commit." That breaks resumability.
+State and log files are working files. Do not commit them unless the user explicitly asks.
 
----
+Legacy: if `.hsonic-autopilot-state.md` is missing but `.autopilot-state.md` exists, read it once and write future checkpoints to `.hsonic-autopilot-state.md`.
 
-## Local Hypersonic Files
+## Resume First
 
-Use Hypersonic-prefixed local files for autopilot memory:
+Before new work:
 
-- `.hsonic-autopilot-state.md` -> current checkpoint for resume
-- `.hsonic-autopilot-log.md` -> local run history
-- `.hypersonic/learned.md` -> repo knowledge shared across sessions
+1. Read `.hsonic-autopilot-state.md` if present.
+2. Otherwise read legacy `.autopilot-state.md` if present.
+3. Read `.hypersonic/learned.md` if present.
+4. Read `.hsonic-autopilot-log.md` if present.
 
-These are working files. They should not be committed unless the human explicitly asks.
+If a checkpoint exists, resume from `Next action`. Do not restart discovery or rebuild the plan from scratch.
 
-Legacy support:
-- If `.hsonic-autopilot-state.md` does not exist but `.autopilot-state.md` does, treat it as the old checkpoint
-- On the next checkpoint, write to `.hsonic-autopilot-state.md`
+Say only: "Resuming autopilot. Picking up at [task or iteration]."
 
----
+## Phase 1 - Finish The Given Plan
 
-## Resume Protocol
-
-Before doing anything else:
-1. Check `.hsonic-autopilot-state.md`
-2. If missing, check legacy `.autopilot-state.md`
-3. Read `.hypersonic/learned.md` if it exists
-4. Read `.hsonic-autopilot-log.md` if it exists
-
-If a checkpoint exists:
-1. Read it fully
-2. Resume from its `Next action`
-3. Do not restart discovery
-4. Do not rebuild the plan from scratch
-5. Do not ask the human for input
-
-Say only:
-> Resuming autopilot. Picking up at [task or iteration].
-
-If no checkpoint exists:
-1. Read `.hypersonic/learned.md` if present
-2. Start from the vision and plan below
-
----
-
-## Two Phases, Always In Order
-
-### Phase 1 — finish the plan
 If the human gave a plan file:
-1. Read the whole plan before starting
-2. Execute tasks in order
-3. Keep one commit per completed task when possible
-4. After each task: verify -> commit -> checkpoint -> log -> continue
-5. If a task is blocked, record the blocker clearly and move to the next task
-6. Return to blocked tasks before declaring Phase 1 done
 
-Do not jump to Phase 2 early because a later task looks more interesting.
+1. Read the whole plan.
+2. Execute tasks in order.
+3. Keep one commit per completed task when possible.
+4. After each task: verify -> commit -> checkpoint -> log -> continue.
+5. If blocked, record the blocker and move to the next task.
+6. Revisit blockers before declaring Phase 1 complete.
 
-### Phase 2 — infinite improvement
-When the plan is complete, switch to a loop:
-1. Choose the highest-value next improvement tied to the vision
-2. Capture a baseline or current failure
-3. Make one meaningful change
-4. Verify the result
-5. Keep it with a commit, or discard it cleanly
-6. Update checkpoint and log
-7. Repeat
+Do not jump to Phase 2 because a later idea looks more interesting.
 
----
+## Phase 2 - Infinite Improvement
 
-## What Counts As A Good Iteration
+When the plan is complete, loop:
 
-Each iteration should have all of these:
-- a clear reason it matters to the vision
-- a bounded scope that can be verified now
-- evidence before and after the change
-- a keep-or-discard decision at the end
+1. Choose the highest-value next improvement tied to the vision.
+2. Capture a baseline or current failure.
+3. Make one bounded change.
+4. Verify the result.
+5. Keep with a commit, or discard cleanly.
+6. Update checkpoint and log.
+7. Repeat until interrupted.
 
-Good iterations:
-- add missing validation for a risky endpoint
-- close a real test gap in business logic
-- remove a hot-path N+1 query and measure improvement
-- simplify a brittle subsystem after tests are in place
+## Good Iterations
 
-Bad iterations:
-- random renames with no payoff
-- cosmetic churn across many files
-- refactors without verification
-- tiny commits that do not change quality, safety, or speed
+A kept iteration needs:
 
----
+- clear reason it matters to the vision
+- bounded scope
+- evidence before and after
+- verification output read by the agent
+- a next action recorded
 
-## Plan Before Acting In Phase 2
+Priority order unless the vision says otherwise:
 
-Do not improvise every loop from zero. Keep a short ranked backlog in the checkpoint:
-- 3-7 next candidate improvements
-- why each one matters
-- expected impact
-- how you will verify it
+1. correctness
+2. reliability
+3. tests for risky behavior
+4. performance
+5. code quality that unlocks future work
+6. developer experience
 
-Refresh this backlog when:
-- Phase 2 starts
-- the current top item is done
-- two iterations in a row produce weak results
-- new evidence changes priorities
+Avoid cosmetic churn while correctness or test gaps are obvious.
 
-This keeps the loop strategic without slowing it down.
+## Checkpoint Shape
 
----
-
-## Improvement Priority Stack
-
-Use this order unless the vision clearly points elsewhere:
-1. Correctness
-2. Reliability
-3. Tests for risky behavior
-4. Performance
-5. Code quality that unlocks future work
-6. Developer experience
-
-Do not spend three iterations polishing T5 or T6 while T1-T3 issues are still obvious.
-
----
-
-## Checkpoint After Every Kept Iteration
-
-Update `.hsonic-autopilot-state.md` after every commit.
-
-Minimum checkpoint shape:
+Update after every kept iteration:
 
 ```markdown
 # Hypersonic Autopilot State
@@ -164,125 +100,61 @@ Minimum checkpoint shape:
 ## Vision
 [human vision]
 
-## Plan file
-[path or none]
+## Current Phase
+[Phase 1 task N | Phase 2 iteration N]
 
-## Current phase
-Phase 1 | Task 4 of 11
+## Next Action
+[exact next task or iteration]
 
-## Next action
-[the exact next task or next iteration]
-
-## Last completed change
+## Last Completed Change
 [commit hash] [one-line summary]
 
-## Open blockers
+## Open Blockers
 - [blocker or none]
 
-## Ranked next candidates
-1. [item] — [why it matters] — [how to verify]
-2. [item] — [why it matters] — [how to verify]
-3. [item] — [why it matters] — [how to verify]
+## Ranked Next Candidates
+1. [item] - [why it matters] - [how to verify]
+2. [item] - [why it matters] - [how to verify]
+3. [item] - [why it matters] - [how to verify]
 
-## Critical repo knowledge
-- [important gotcha]
-- [important convention]
-
-## Resume notes
-[2-4 lines the next session should know]
+## Resume Notes
+[2-4 dense lines]
 ```
 
-Keep it dense. The checkpoint is for fast resume, not storytelling.
-
----
-
-## Logging
-
-Write a short local history to `.hsonic-autopilot-log.md`.
-
-Log:
-- task completion in Phase 1
-- kept and discarded iterations in Phase 2
-- important decisions
-- blockers worth remembering
-
-Keep entries short. The log is a timeline, not a diary.
-
----
+Keep the checkpoint dense. It is for fast resume, not storytelling.
 
 ## Verification Standard
 
-Autopilot is not allowed to declare progress without evidence.
-
 Before keeping a change:
-1. Run the relevant tests or checks
-2. Verify the behavior you changed
-3. Check the diff for accidental churn
-4. Confirm the result is better than the baseline
 
-If the change does not hold up, discard it.
+1. Run the required checks for `test_mode`.
+2. Verify the changed behavior directly when possible.
+3. Check the diff for accidental churn.
+4. Confirm the result is better than the baseline.
 
----
+If the change does not hold up, discard it and log why.
 
-## Handling Blockers
+## Safety Brake
 
-Do not stop the loop because one path is blocked.
+Autopilot is continuous, but it must not churn.
 
-When blocked:
-1. Try the obvious resolution path
-2. If still blocked, record the blocker
-3. Move to the next best task or improvement
-4. Revisit later if new work unblocks it
+Pause the improvement loop, checkpoint, and switch to re-ranking candidates when:
 
----
+- two iterations in a row fail verification
+- the ranked candidates no longer have a clear vision payoff
+- the next best change would be broad, destructive, or hard to verify unattended
+- the working tree contains unrelated user changes that would be touched
+- the current work requires human product judgment, credentials, or external approval
 
-## When Progress Gets Shallow
+After re-ranking, continue only with a bounded, verifiable candidate. If none exists, checkpoint the blocker and keep monitoring for a safe next action instead of making cosmetic commits.
 
-If the last two iterations feel cosmetic or low-yield, stop and reset the loop:
-1. Re-read the vision
-2. Re-read `.hypersonic/learned.md`
-3. Re-scan the code for high-risk areas, weak tests, error paths, or hotspots
-4. Refresh the ranked backlog
-5. Pick a stronger item
+## Avoid
 
-Autopilot should get deeper over time, not noisier.
+- activity without value
+- infinite replanning
+- skipping checkpoints
+- keeping unverified changes
+- tiny commits with no quality, safety, speed, or vision payoff
+- asking the human what to do next
 
----
-
-## Anti-Patterns
-
-**Activity without value.** A lot of commits does not equal good progress.
-
-**Infinite replanning.** Planning is only useful if it tightens the next iteration.
-
-**Checkpoint neglect.** If the session dies and the next session cannot resume quickly, autopilot failed.
-
-**Verification theater.** "This should help" is not evidence.
-
-**Human interruption seeking.** Autopilot is unattended work. Do not bounce decisions back to the user.
-
----
-
-## Anti-Rationalization Table
-
-| What you're thinking | What's actually true |
-|---|---|
-| "This iteration is small, I can skip the checkpoint" | That is how long unattended runs lose continuity. |
-| "Let me make a few cleanup commits while I think" | Cosmetic churn is not progress. Pick a stronger item. |
-| "I’ve already improved a lot, it’s fine to stop here" | Autopilot stops only when the human interrupts. |
-| "This probably improved things" | Baseline it, verify it, then decide. |
-| "I should ask the user before continuing" | No. Make the best local decision and continue. |
-
----
-
-## Keep-Iteration Checklist
-
-Before you keep any iteration:
-
-1. The change matters to the vision
-2. The baseline and result are both clear
-3. The required verification depth from `test_mode` is done
-4. The checkpoint and log are updated
-5. The next iteration is obvious
-
-The standard is simple: keep shipping real improvements, leave strong checkpoints, and make the next session smarter than this one.
+The standard: one meaningful verified improvement at a time, forever until interrupted.
